@@ -15,7 +15,7 @@
 // =====================================================================
 const zlib = require('zlib');
 
-const TABLES = ['settings', 'titles', 'provinces', 'postcodes', 'customers', 'books', 'letters', 'print_logs', 'profiles', 'backup_logs'];
+const TABLES = ['settings', 'titles', 'provinces', 'postcodes', 'customers', 'books', 'letters', 'print_logs', 'profiles', 'envelope_layouts', 'backup_logs'];
 const BUCKET = 'backups';
 
 function send(res, code, body) {

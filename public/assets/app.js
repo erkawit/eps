@@ -3,7 +3,7 @@
 //  Vanilla JS + Supabase + SweetAlert2 (no build step)
 // =====================================================================
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
-import { ENVELOPES, esc, renderEnvelope, pageCss, envSize, areaLine, SAMPLE_LETTER } from './envelope.js';
+import { ENVELOPES, esc, renderEnvelope, pageCss, envSize, areaLine, SAMPLE_LETTER, resolveLayout, defaultLayout } from './envelope.js';
 
 const CFG = window.APP_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
@@ -35,7 +35,7 @@ const loading = (title = 'กำลังดำเนินการ...') => Swa
 function thaiError(e) {
   const m = e?.message || String(e);
   if (/Invalid login/i.test(m)) return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
-  if (/Email not confirmed/i.test(m)) return 'อีเมลยังไม่ได้ยืนยัน กรุณากดลิงก์ยืนยันในอีเมล หรือให้ผู้ดูแลปิด "Confirm email" ใน Supabase';
+  if (/Email not confirmed/i.test(m)) return 'บัญชียังไม่ได้รับการยืนยัน กรุณาติดต่อผู้ดูแลระบบให้อนุมัติ (หรือกดลิงก์ยืนยันในอีเมล)';
   if (/already registered|already been registered/i.test(m)) return 'อีเมลนี้มีผู้ใช้งานแล้ว';
   if (/Password should be/i.test(m)) return 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร';
   if (/duplicate key/i.test(m)) return 'ข้อมูลซ้ำกับที่มีอยู่แล้ว';
@@ -60,6 +60,7 @@ const opt = (v, label, sel) => `<option value="${esc(v)}"${String(v) === String(
 const val = (id) => document.getElementById(id)?.value?.trim() ?? '';
 
 const ICONS = {
+  layout: '<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>',
   reports: '<path d="M3 3v18h18"/><path d="M8 17V11M13 17V7M18 17v-4"/>',
   backup: '<path d="M21 8v13H3V8"/><path d="M1 3h22v5H1zM10 12h4"/>',
   connection: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
@@ -82,6 +83,7 @@ const ROUTES = {
   register: { group: 'staff', title: 'ทะเบียนหนังสือส่ง / พิมพ์ซอง', nav: 'ทะเบียน / พิมพ์ซอง', render: viewRegister },
   recipients: { group: 'staff', title: 'ผู้รับ / หน่วยงาน', render: viewRecipients },
   reports: { group: 'staff', title: 'รายงานการพิมพ์ซอง', render: viewReports },
+  layout: { group: 'staff', title: 'ตั้งค่าตำแหน่งบนซอง', render: viewLayout },
   dashboard: { group: 'admin', title: 'ภาพรวมระบบ', render: viewDashboard },
   books: { group: 'admin', title: 'เล่มทะเบียนเลขหนังสือ', render: viewBooks },
   users: { group: 'admin', title: 'ผู้ใช้งาน', render: viewUsers },
@@ -235,7 +237,17 @@ async function loadRefs() {
   ]);
   S.settings = settings || {};
   S.books = books; S.titles = titles; S.provinces = provinces;
+  await loadMyLayouts();
 }
+
+// ---- per-user envelope layout ----
+async function loadMyLayouts() {
+  S.layouts = { white: null, brown: null };
+  const { data, error } = await S.sb.from('envelope_layouts').select('*').eq('user_id', S.profile.id).order('created_at', { ascending: false }).limit(60);
+  if (error) return; // table not created yet → factory defaults
+  for (const r of data) if (!S.layouts[r.envelope]) S.layouts[r.envelope] = r;
+}
+const myLayout = (type, settings = S.settings) => resolveLayout(type, settings, S.layouts?.[type]?.layout || null);
 const reloadBooks = async () => { S.books = await must(S.sb.from('books').select('*').order('id')); };
 
 $('#login-form').addEventListener('submit', async (e) => {
@@ -275,7 +287,7 @@ $('#link-register').addEventListener('click', async (e) => {
     if (error) throw error;
     Swal.close();
     if (data.session) return enterApp(data.session);
-    Swal.fire({ icon: 'success', title: 'ส่งคำขอแล้ว', text: 'กรุณายืนยันอีเมล แล้วรอผู้ดูแลระบบอนุมัติ' });
+    Swal.fire({ icon: 'success', title: 'ส่งคำขอแล้ว', text: 'กรุณารอผู้ดูแลระบบอนุมัติ เมื่ออนุมัติแล้วเข้าสู่ระบบได้ทันที (ไม่ต้องกดยืนยันอีเมล)' });
   } catch (err) { fail(err); }
 });
 
@@ -656,12 +668,13 @@ async function waitForPrintAssets(root) {
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 }
 
-async function printLetters(rows, type, settings = S.settings, { markPrinted = true } = {}) {
+async function printLetters(rows, type, settings = S.settings, { markPrinted = true, layout = null } = {}) {
   rows = (rows || []).filter((r) => r.status !== 'cancelled');
   if (!rows.length) return warn('ไม่มีรายการที่พิมพ์ได้');
   const root = $('#print-root');
-  root.innerHTML = rows.map((r) => renderEnvelope(r, settings, type)).join('');
-  $('#print-page-style').textContent = pageCss(type, settings);
+  const L = layout || myLayout(type, settings);
+  root.innerHTML = rows.map((r) => renderEnvelope(r, settings, type, L)).join('');
+  $('#print-page-style').textContent = pageCss(type, L);
   await waitForPrintAssets(root);
   window.print();
   root.innerHTML = '';
@@ -676,13 +689,14 @@ async function printLetters(rows, type, settings = S.settings, { markPrinted = t
   try { await must(S.sb.rpc('mark_printed', { p_ids: rows.map((r) => r.id), p_envelope: type })); ok(`บันทึกการพิมพ์ ${rows.length} ซองแล้ว`); } catch (e) { fail(e); }
 }
 
-function previewHtml(rows, type, settings = S.settings, max = 6, maxW = 820) {
-  const { w, h } = envSize(type, settings);
+function previewHtml(rows, type, settings = S.settings, max = 6, maxW = 820, layout = null) {
+  const L = layout || myLayout(type, settings);
+  const { w, h } = envSize(type, L);
   const pxW = w * 3.7795, pxH = h * 3.7795;
   const scale = Math.min(1, (maxW - 16) / pxW, 520 / pxH);
   const items = rows.slice(0, max).map((r) => `
     <div class="preview-frame" style="width:${pxW * scale}px;height:${pxH * scale}px">
-      <div class="preview-scale" style="transform:scale(${scale})">${renderEnvelope(r, settings, type).replace('class="env ', 'class="env on-screen ')}</div>
+      <div class="preview-scale" style="transform:scale(${scale})">${renderEnvelope(r, settings, type, L).replace('class="env ', 'class="env on-screen ')}</div>
     </div>`).join('');
   return `<div class="preview-box">${items}${rows.length > max ? `<div class="muted">… และอีก ${rows.length - max} ซอง</div>` : ''}</div>`;
 }
@@ -842,21 +856,40 @@ async function bookForm(b) {
 //  ADMIN — Users
 // =====================================================================
 async function viewUsers() {
-  const users = await must(S.sb.from('profiles').select('*').order('created_at'));
+  const [users, auth] = await Promise.all([
+    must(S.sb.from('profiles').select('*').order('created_at')),
+    S.sb.rpc('admin_user_auth_status').then((r) => (r.error ? null : r.data)),
+  ]);
+  const authMap = new Map((auth || []).map((a) => [a.id, a]));
+  const mailCell = (u) => {
+    if (!auth) return '<span class="muted">—</span>';
+    const a = authMap.get(u.id);
+    return a?.email_confirmed_at ? '<span class="badge b-printed">✔ ยืนยันแล้ว</span>'
+      : `<span class="badge b-issued">ยังไม่ยืนยัน</span> <button class="btn btn-sm" data-confirm="${u.id}">ยืนยันให้</button>`;
+  };
   $('#topbar-right').innerHTML = '<button class="btn btn-primary" id="u-add">+ เพิ่มผู้ใช้งาน</button>';
   view().innerHTML = `<div class="card"><div class="table-wrap"><table>
-    <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>บทบาท</th><th>สถานะ</th><th>วันที่สร้าง</th></tr></thead>
-    <tbody>${users.map((u) => { const me = u.id === S.profile.id; return `<tr data-id="${u.id}">
+    <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>ยืนยันอีเมล</th><th>บทบาท</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th></tr></thead>
+    <tbody>${users.map((u) => { const me = u.id === S.profile.id; const a = authMap.get(u.id); return `<tr data-id="${u.id}">
       <td><b>${esc(u.full_name || '')}</b>${me ? ' <span class="muted">(คุณ)</span>' : ''}</td><td>${esc(u.email || '')}</td>
+      <td style="white-space:nowrap">${mailCell(u)}</td>
       <td><select data-f="role" ${me ? 'disabled' : ''} style="width:auto">${opt('staff', 'เจ้าหน้าที่', u.role)}${opt('admin', 'ผู้ดูแลระบบ', u.role)}</select></td>
       <td><label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" data-f="active" ${u.active ? 'checked' : ''} ${me ? 'disabled' : ''}> ${u.active ? 'ใช้งานได้' : '<span class="badge b-issued">รออนุมัติ / ปิด</span>'}</label></td>
-      <td>${fmtDate(u.created_at)}</td></tr>`; }).join('')}</tbody></table></div>
-    <p class="muted" style="font-size:18px;margin-bottom:0">การรีเซ็ตรหัสผ่านหรือลบบัญชีถาวร ทำได้ที่ Supabase Dashboard → Authentication → Users</p></div>`;
+      <td style="white-space:nowrap">${a?.last_sign_in_at ? `${fmtDate(a.last_sign_in_at)} ${fmtTime(a.last_sign_in_at)}` : '<span class="muted">ยังไม่เคย</span>'}</td></tr>`; }).join('')}</tbody></table></div>
+    <p class="muted" style="font-size:18px;margin-bottom:0">ผู้ใช้ที่ผู้ดูแลสร้างหรืออนุมัติ จะได้รับการยืนยันอีเมลให้อัตโนมัติ เข้าสู่ระบบได้ทันที · การรีเซ็ตรหัสผ่านหรือลบบัญชีถาวร ทำได้ที่ Supabase Dashboard → Authentication → Users</p></div>`;
   view().addEventListener('change', async (e) => {
     const f = e.target.dataset.f; if (!f) return;
     const id = e.target.closest('tr').dataset.id;
     const patch = f === 'role' ? { role: e.target.value } : { active: e.target.checked };
-    try { await must(S.sb.from('profiles').update(patch).eq('id', id)); ok('บันทึกแล้ว'); route(); } catch (er) { fail(er); }
+    try {
+      await must(S.sb.from('profiles').update(patch).eq('id', id));
+      if (patch.active && auth && !authMap.get(id)?.email_confirmed_at) await must(S.sb.rpc('admin_confirm_user', { p_id: id }));
+      ok(patch.active ? 'อนุมัติแล้ว — ผู้ใช้เข้าสู่ระบบได้ทันที' : 'บันทึกแล้ว'); route();
+    } catch (er) { fail(er); }
+  });
+  view().addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-confirm]'); if (!b) return;
+    try { await must(S.sb.rpc('admin_confirm_user', { p_id: b.dataset.confirm })); ok('ยืนยันอีเมลแล้ว'); route(); } catch (er) { fail(er); }
   });
   $('#u-add').addEventListener('click', addUser);
 }
@@ -881,13 +914,32 @@ async function addUser() {
   const d = r.value;
   try {
     loading('กำลังสร้างผู้ใช้...');
-    // a separate client so the admin's own session is not replaced
-    const tmp = createClient(S.conn.url, S.conn.key, { auth: { persistSession: false, autoRefreshToken: false, storageKey: 'tmp-signup' } });
-    const { data, error } = await tmp.auth.signUp({ email: d.email, password: d.pass, options: { data: { full_name: d.name } } });
-    if (error) throw error;
-    if (!data.user || (data.user.identities && data.user.identities.length === 0)) throw new Error('อีเมลนี้มีผู้ใช้งานแล้ว');
-    await must(S.sb.from('profiles').update({ active: true, role: d.role, full_name: d.name }).eq('id', data.user.id));
-    await Swal.fire({ icon: 'success', title: 'สร้างผู้ใช้สำเร็จ', html: `อีเมล: <b>${esc(d.email)}</b><br>รหัสผ่าน: <b>${esc(d.pass)}</b><br><span class="muted">กรุณาแจ้งผู้ใช้และให้เปลี่ยนรหัสผ่านภายหลัง</span>` });
+    let via = 'server';
+    const { data: { session } } = await S.sb.auth.getSession();
+    const resp = await fetch('/api/admin-users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ email: d.email, password: d.pass, full_name: d.name, role: d.role }),
+    }).catch(() => null);
+    const j = resp ? await resp.json().catch(() => null) : null;
+    if (!(resp?.ok && j?.ok)) {
+      // server not available (no service key / local) → fall back to sign-up, then confirm the e-mail ourselves
+      if (j && j.code !== 'not_configured' && resp.status !== 404) throw new Error(j.error || `HTTP ${resp.status}`);
+      via = 'client';
+      const tmp = createClient(S.conn.url, S.conn.key, { auth: { persistSession: false, autoRefreshToken: false, storageKey: 'tmp-signup' } });
+      const { data, error } = await tmp.auth.signUp({ email: d.email, password: d.pass, options: { data: { full_name: d.name } } });
+      if (error) {
+        if (/rate limit/i.test(error.message)) throw new Error('Supabase จำกัดจำนวนอีเมลที่ส่งได้ต่อชั่วโมง — ตั้ง SUPABASE_SERVICE_ROLE_KEY ใน Vercel (แนะนำ) หรือปิด "Confirm email" ใน Supabase แล้วลองใหม่');
+        throw error;
+      }
+      if (!data.user || (data.user.identities && data.user.identities.length === 0)) throw new Error('อีเมลนี้มีผู้ใช้งานแล้ว');
+      await must(S.sb.rpc('admin_confirm_user', { p_id: data.user.id }));
+      await must(S.sb.from('profiles').update({ active: true, role: d.role, full_name: d.name }).eq('id', data.user.id));
+    }
+    await Swal.fire({
+      icon: 'success', title: 'สร้างผู้ใช้สำเร็จ — เข้าสู่ระบบได้ทันที',
+      html: `อีเมล: <b>${esc(d.email)}</b><br>รหัสผ่าน: <b>${esc(d.pass)}</b><br><span class="muted">ไม่ต้องยืนยันอีเมล${via === 'client' ? ' (ผู้ใช้อาจได้รับอีเมลจาก Supabase ให้เพิกเฉยได้)' : ''}<br>กรุณาแจ้งผู้ใช้และให้เปลี่ยนรหัสผ่านภายหลัง</span>`,
+    });
     route();
   } catch (e) { fail(e); }
 }
@@ -1005,13 +1057,8 @@ async function viewSettings() {
           <label class="full">ข้อความช่องค่าฝากส่ง (มุมขวาบน)<textarea id="s-postage_text" rows="3">${esc(s.postage_text || '')}</textarea></label>
           <label class="full" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="s-show_postage" ${s.show_postage !== false ? 'checked' : ''}> แสดงช่องค่าฝากส่ง</label>
         </div></div>
-      <div class="card"><div class="card-head"><h3>ปรับตำแหน่งการพิมพ์ (มิลลิเมตร)</h3></div>
-        <p class="muted" style="margin-top:0;font-size:18px">ถ้าพิมพ์ออกมาเยื้อง ให้ใส่ค่าเลื่อน เช่น X = 3 (ขวา 3 มม.), Y = -2 (ขึ้น 2 มม.)</p>
-        <div class="form-grid">
-          ${N('white_offset_x', 'ซองขาว เลื่อนแนวนอน X', s.white_offset_x)}${N('white_offset_y', 'ซองขาว เลื่อนแนวตั้ง Y', s.white_offset_y)}
-          ${N('brown_offset_x', 'ซองน้ำตาล เลื่อนแนวนอน X', s.brown_offset_x)}${N('brown_offset_y', 'ซองน้ำตาล เลื่อนแนวตั้ง Y', s.brown_offset_y)}
-          <label class="full">การวางซองน้ำตาลในเครื่องพิมพ์<select id="s-brown_orientation">${opt('landscape', 'แนวนอน (กว้าง 10" × สูง 8.2")', s.brown_orientation)}${opt('portrait', 'แนวตั้ง (กว้าง 8.2" × สูง 10")', s.brown_orientation)}</select></label>
-        </div></div>
+      <div class="card"><div class="card-head"><h3>ตำแหน่งข้อความบนซอง</h3></div>
+        <p style="margin:0">การย้ายตำแหน่งข้อความ ขนาดตัวอักษร และการวางซองน้ำตาล ตั้งค่าแยกตามผู้ใช้ที่เมนู <a href="#layout"><b>ตั้งค่าตำแหน่งบนซอง</b></a> (ตัวอย่างด้านขวาแสดงตามการตั้งค่าของคุณ)</p></div>
       <div class="card"><div class="card-head"><h3>รหัสผู้รับอัตโนมัติ</h3></div>
         <div class="form-grid">
           ${F('customer_prefix', 'ตัวอักษรนำหน้า', s.customer_prefix)}
@@ -1030,8 +1077,8 @@ async function viewSettings() {
 
   const collect = () => {
     const d = { ...s };
-    ['org_name', 'address', 'amphur', 'province', 'postcode', 'telephone', 'fax', 'recipient_prefix', 'postage_text', 'customer_prefix', 'brown_orientation'].forEach((k) => { d[k] = $('#s-' + k).value; });
-    ['white_offset_x', 'white_offset_y', 'brown_offset_x', 'brown_offset_y', 'customer_length'].forEach((k) => { d[k] = Number($('#s-' + k).value || 0); });
+    ['org_name', 'address', 'amphur', 'province', 'postcode', 'telephone', 'fax', 'recipient_prefix', 'postage_text', 'customer_prefix'].forEach((k) => { d[k] = $('#s-' + k).value; });
+    ['customer_length'].forEach((k) => { d[k] = Number($('#s-' + k).value || 0); });
     ['show_emblem', 'show_postage', 'customer_year'].forEach((k) => { d[k] = $('#s-' + k).checked; });
     return d;
   };
@@ -1104,9 +1151,8 @@ async function viewReports() {
     <div id="rp-chart"></div>
   </div>
   <div class="card">
-    <div class="card-head"><h3>ตารางสรุป</h3><button class="btn btn-sm" id="rp-detail">📄 รายละเอียดการพิมพ์รายฉบับ</button></div>
-    <div class="table-wrap" id="rp-table" style="max-height:60vh"></div>
-    <div id="rp-detail-box"></div>
+    <div class="card-head"><h3>รายการซองที่พิมพ์ <span class="muted" style="font-weight:400;font-size:18px">(เรียงตามเลขที่หนังสือ)</span></h3><span class="badge b-staff" id="rp-count"></span></div>
+    <div class="table-wrap" id="rp-table" style="max-height:65vh"></div>
   </div>`;
 
   const yearOpts = (sel) => Array.from({ length: 12 }, (_, i) => by - i).map((y) => opt(y, `พ.ศ. ${y}`, sel)).join('');
@@ -1156,7 +1202,11 @@ async function viewReports() {
     const [a, b] = rangeCE();
     $('#rp-chart').innerHTML = '<div class="empty">กำลังโหลด...</div>';
     try {
-      const data = await must(S.sb.rpc('print_report', { p_period: R.period, p_from: a, p_to: b }));
+      const [data, items] = await Promise.all([
+        must(S.sb.rpc('print_report', { p_period: R.period, p_from: a, p_to: b })),
+        must(S.sb.rpc('print_report_items', { p_from: a, p_to: b, p_envelope: null })),
+      ]);
+      R.items = items.map((i) => ({ ...i, white: Number(i.white || 0), brown: Number(i.brown || 0), prints: Number(i.prints || 0) }));
       const map = new Map(data.map((d) => [d.period_key, d]));
       R.rows = periodKeys().map((k) => {
         const d = map.get(k) || {};
@@ -1167,6 +1217,7 @@ async function viewReports() {
   };
 
   const sum = (k) => R.rows.reduce((t, r) => t + r[k], 0);
+  const shownItems = () => (R.env === 'all' ? R.items || [] : (R.items || []).filter((i) => i[R.env] > 0));
   const paint = () => {
     const W = sum('white'), B = sum('brown'), T = sum('total');
     const unit = R.period === 'day' ? 'วัน' : R.period === 'month' ? 'เดือน' : 'ปี';
@@ -1183,8 +1234,9 @@ async function viewReports() {
     $('#rp-legend').innerHTML = series.length > 1 ? series.map((k) => `<span><i class="sw" style="background:${SERIES[k].color}"></i>${SERIES[k].label}</span>`).join('') : '';
     $('#rp-chart').innerHTML = barChart(R.rows, series, (k) => labelOf(k), R.period);
     bindTooltip($('#rp-chart'), R.rows, series, (k) => labelOf(k, false));
-    $('#rp-table').innerHTML = reportTable(R.rows, cols(), (k) => labelOf(k, false), colLabel);
-    $('#rp-detail-box').innerHTML = '';
+    const items = shownItems();
+    $('#rp-count').textContent = `${num(items.length)} ฉบับ`;
+    $('#rp-table').innerHTML = itemsTable(items, R.env);
   };
 
   const bindFilters = () => {
@@ -1208,50 +1260,55 @@ async function viewReports() {
   });
   $$('input[name="rp-env"]').forEach((x) => x.addEventListener('change', (e) => { R.env = e.target.value; paint(); }));
   $('#rp-csv').addEventListener('click', () => {
-    const c = cols();
-    const lines = [[`รายงานการพิมพ์ซองจดหมาย ${PERIODS[R.period]} (${ENV_FILTER[R.env]})`], [rangeText()], [],
-      ['ช่วงเวลา', ...c.map(colLabel)], ...R.rows.map((r) => [labelOf(r.key, false), ...c.map((k) => r[k])]),
-      ['รวม', ...c.map((k) => sum(k))]];
-    const csv = '﻿' + lines.map((l) => l.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const items = shownItems();
+    const c = R.env === 'all' ? ['white', 'brown', 'prints'] : [R.env];
+    const lines = [[`รายงานการพิมพ์ซองจดหมาย (${ENV_FILTER[R.env]})`], [rangeText()], [],
+      ['ลำดับ', 'เลขที่หนังสือ', 'วันที่ออกเลข', 'ผู้รับ', 'จังหวัด', 'เรื่อง', ...c.map(itemColLabel), 'พิมพ์ล่าสุด', 'ผู้พิมพ์', 'สถานะ'],
+      ...items.map((i, n) => [n + 1, i.doc_number, thDate(bkkDate(new Date(i.issued_at)), false), i.recipient_name, i.recipient_province || '', i.subject || '',
+        ...c.map((k) => i[k]), `${fmtDate(i.last_printed_at)} ${fmtTime(i.last_printed_at)}`, i.printed_by || '', i.status === 'cancelled' ? 'ยกเลิก' : '']),
+      ['', `รวม ${items.length} ฉบับ`, '', '', '', '', ...c.map((k) => items.reduce((t, i) => t + i[k], 0))]];
+    const csv = '\ufeff' + lines.map((l) => l.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const [a, b] = rangeCE();
-    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `รายงานการพิมพ์ซอง_${PERIODS[R.period]}_${a}_${b}.csv`);
+    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `รายการซองที่พิมพ์_${a}_${b}.csv`);
   });
   $('#rp-print').addEventListener('click', () => {
-    const c = cols();
+    const items = shownItems();
+    if (!items.length) return warn('ไม่มีรายการในช่วงเวลานี้');
+    const W = items.reduce((t, i) => t + i.white, 0), B = items.reduce((t, i) => t + i.brown, 0);
+    const box = (label, v, unit) => `<div>${label}<b>${num(v)}</b>${unit}</div>`;
     printReport(`
-      <div class="rp-head"><img src="/assets/logo.png" alt=""><div><h2>รายงานการพิมพ์ซองจดหมาย${PERIODS[R.period]}</h2><div>${esc(S.settings.org_name || '')}</div></div></div>
+      <div class="rp-head"><img src="/assets/logo.png" alt=""><div><h2>รายงานการพิมพ์ซองจดหมาย</h2><div>${esc(S.settings.org_name || '')}</div></div></div>
       <div class="rp-meta"><span><b>ช่วงเวลา:</b> ${esc(rangeText())}</span><span><b>ประเภทซอง:</b> ${ENV_FILTER[R.env]}</span></div>
-      <div class="rp-sum">${c.map((k) => `<div>${colLabel(k)}<b>${num(sum(k))}</b> ซอง</div>`).join('')}</div>
-      ${reportTable(R.rows, c, (k) => labelOf(k, false), colLabel, true)}
+      <div class="rp-sum">${box('จำนวนหนังสือ', items.length, 'ฉบับ')}${R.env !== 'brown' ? box('ซองขาว', W, 'ซอง') : ''}${R.env !== 'white' ? box('ซองน้ำตาล', B, 'ซอง') : ''}${R.env === 'all' ? box('รวม', W + B, 'ซอง') : ''}</div>
+      ${itemsTable(items, R.env, true)}
       <div class="rp-sign"><div>ลงชื่อ ..................................................... ผู้รายงาน<br>(${esc(S.profile.full_name || S.profile.email)})</div>
       <div>พิมพ์เมื่อ ${thDate(bkkDate(), false)} เวลา ${fmtTime(new Date())} น.</div></div>`);
-  });
-  $('#rp-detail').addEventListener('click', async () => {
-    const box = $('#rp-detail-box');
-    const [a, b] = rangeCE();
-    box.innerHTML = '<div class="empty">กำลังโหลด...</div>';
-    try {
-      let qb = S.sb.from('print_logs').select('id,envelope,printed_at,printed_by_name,letters(doc_number,recipient_name,recipient_province)')
-        .gte('printed_at', `${a}T00:00:00+07:00`).lte('printed_at', `${b}T23:59:59.999+07:00`);
-      if (R.env !== 'all') qb = qb.eq('envelope', R.env);
-      const rows = await must(qb.order('printed_at').limit(3000));
-      box.innerHTML = `<h3 style="color:var(--navy);margin:18px 0 10px">รายละเอียดการพิมพ์ ${num(rows.length)} ครั้ง${rows.length >= 3000 ? ' (แสดง 3,000 รายการแรก)' : ''}</h3>
-        <div class="table-wrap" style="max-height:60vh"><table><thead><tr><th>วันที่ / เวลา</th><th>เลขที่หนังสือ</th><th>ผู้รับ</th><th>ซอง</th><th>ผู้พิมพ์</th></tr></thead><tbody>
-        ${rows.map((r) => `<tr><td style="white-space:nowrap">${fmtDate(r.printed_at)} ${fmtTime(r.printed_at)}</td><td class="num">${esc(r.letters?.doc_number || '')}</td>
-          <td>${esc(r.letters?.recipient_name || '')}<span class="muted"> ${esc(r.letters?.recipient_province || '')}</span></td>
-          <td><span class="badge b-${r.envelope}">${ENVELOPES[r.envelope].label}</span></td><td>${esc(r.printed_by_name || '')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">ไม่มีการพิมพ์ในช่วงนี้</td></tr>'}
-        </tbody></table></div>`;
-    } catch (e) { box.innerHTML = `<div class="empty">${esc(thaiError(e))}</div>`; }
   });
 
   paintFilters(); bindFilters(); load();
 }
 
-function reportTable(rows, cols, labelOf, colLabel, forPrint = false) {
-  const total = (k) => rows.reduce((t, r) => t + r[k], 0);
-  return `<table class="${forPrint ? 'rp-table' : ''}"><thead><tr><th>ช่วงเวลา</th>${cols.map((c) => `<th class="r">${colLabel(c)}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map((r) => `<tr${r.total ? '' : ' class="zero"'}><td>${esc(labelOf(r.key))}</td>${cols.map((c) => `<td class="r">${num(r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
-    <tfoot><tr><td>รวม</td>${cols.map((c) => `<td class="r">${num(total(c))}</td>`).join('')}</tr></tfoot></table>`;
+const itemColLabel = (c) => (c === 'prints' ? 'รวม (ครั้ง)' : `${SERIES[c].label} (ครั้ง)`);
+
+/** One row per letter, sorted by document number (already sorted by the database). */
+function itemsTable(items, env, forPrint = false) {
+  const c = env === 'all' ? ['white', 'brown', 'prints'] : [env];
+  const tot = (k) => items.reduce((t, i) => t + i[k], 0);
+  const issued = (i) => fmtDate(i.issued_at);
+  if (!items.length) return '<div class="empty">ไม่มีการพิมพ์ซองในช่วงเวลานี้</div>';
+  const colg = forPrint ? `<colgroup><col style="width:9mm"><col style="width:26mm"><col style="width:20mm"><col><col style="width:27mm">${c.map(() => '<col style="width:16mm">').join('')}</colgroup>` : '';
+  return `<table class="${forPrint ? 'rp-table rp-items' : ''}">${colg}<thead><tr>
+      <th class="r" style="width:${forPrint ? '11mm' : '60px'}">ลำดับ</th><th>เลขที่หนังสือ</th><th>วันที่ออกเลข</th><th>ผู้รับ</th><th>เรื่อง</th>
+      ${c.map((k) => `<th class="r">${forPrint ? itemColLabel(k).replace(' (ครั้ง)', '') : itemColLabel(k)}</th>`).join('')}
+      ${forPrint ? '' : '<th>พิมพ์ล่าสุด</th><th>ผู้พิมพ์</th>'}</tr></thead>
+    <tbody>${items.map((i, n) => `<tr${i.status === 'cancelled' ? ' class="zero"' : ''}>
+      <td class="r">${n + 1}</td><td style="white-space:nowrap"><b>${esc(i.doc_number)}</b>${i.status === 'cancelled' ? '<div class="muted">(ยกเลิก)</div>' : ''}</td>
+      <td style="white-space:nowrap">${issued(i)}</td>
+      <td>${esc(i.recipient_name)}${i.recipient_province ? `<span class="muted"> · ${esc(i.recipient_province)}</span>` : ''}</td>
+      <td>${esc(i.subject || '')}</td>
+      ${c.map((k) => `<td class="r">${num(i[k])}</td>`).join('')}
+      ${forPrint ? '' : `<td style="white-space:nowrap">${fmtDate(i.last_printed_at)} ${fmtTime(i.last_printed_at)}</td><td>${esc(i.printed_by || '')}</td>`}</tr>`).join('')}</tbody>
+    <tfoot><tr><td></td><td colspan="4">รวม ${num(items.length)} ฉบับ</td>${c.map((k) => `<td class="r">${num(tot(k))}</td>`).join('')}${forPrint ? '' : '<td colspan="2"></td>'}</tr></tfoot></table>`;
 }
 
 /** Stacked bar chart in plain HTML (2px surface gap between segments, rounded data-end). */
@@ -1316,7 +1373,7 @@ function saveBlob(blob, name) {
 // =====================================================================
 //  ADMIN — สำรองข้อมูล (backup to Supabase Storage: ปี พ.ศ. / เดือน / วันที่)
 // =====================================================================
-const BACKUP_TABLES = ['settings', 'titles', 'provinces', 'postcodes', 'customers', 'books', 'letters', 'print_logs', 'profiles', 'backup_logs'];
+const BACKUP_TABLES = ['settings', 'titles', 'provinces', 'postcodes', 'customers', 'books', 'letters', 'print_logs', 'profiles', 'envelope_layouts', 'backup_logs'];
 const BACKUP_BUCKET = 'backups';
 
 function bkkParts(d = new Date()) {
@@ -1506,6 +1563,204 @@ async function viewConnection() {
       + row(st, 'Storage bucket "backups"', st ? '' : 'รัน 01_schema.sql อีกครั้งเพื่อสร้าง bucket')
       + row(api?.configured, 'ฟังก์ชันสำรองข้อมูลอัตโนมัติ (Vercel)', api?.configured ? `เวลา 00:00 น. ทุกวัน${api.cron_secret ? '' : ' · แนะนำให้ตั้ง CRON_SECRET'}` : 'ตั้ง SUPABASE_SERVICE_ROLE_KEY ใน Vercel');
   });
+}
+
+// =====================================================================
+//  ตั้งค่าตำแหน่งบนซอง — per-user layout editor (white / brown separately)
+//  • drag blocks on the preview or type exact millimetres
+//  • every save = new version (date/time + user)  → history
+//  • load another user's layout and save it as your own in one click
+// =====================================================================
+const LAY_BLOCKS = { sender: 'ผู้ส่ง / เลขที่หนังสือ', postage: 'ช่องค่าฝากส่ง', recipient: 'ผู้รับ' };
+const PX_PER_MM = 3.7795;
+const r05 = (n) => Math.round(n * 2) / 2;
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const fmtDT = (d) => `${fmtDate(d)} ${fmtTime(d)} น.`;
+
+async function viewLayout() {
+  await loadMyLayouts();
+  S.lay = S.lay || { type: 'white', draft: {}, dirty: {}, source: {} };
+  const Y = S.lay;
+  for (const t of ['white', 'brown']) if (!Y.draft[t] || !Y.dirty[t]) { Y.draft[t] = clone(myLayout(t)); Y.dirty[t] = false; Y.source[t] = null; }
+
+  view().innerHTML = `
+  <div class="tabs" id="ly-tabs">${Object.values(ENVELOPES).map((e) => `<button data-t="${e.key}">${e.label} ${e.size}</button>`).join('')}</div>
+  <div class="lay-status" id="ly-status"></div>
+  <div class="lay-cols">
+    <div class="lay-left">
+      <div class="card">
+        <div class="card-head"><h3>ตัวอย่างซอง — ลากกล่องเพื่อย้าย</h3></div>
+        <div class="lay-stage" id="ly-stage"></div>
+        <p class="muted" style="margin:8px 0 10px;font-size:18px">ลากกล่องเส้นประ (ผู้ส่ง · ช่องค่าฝากส่ง · ผู้รับ) หรือพิมพ์ค่าเป็นมิลลิเมตรด้านขวา วัดจากมุมซ้ายบนของซอง · การตั้งค่านี้เป็นของคุณคนเดียว ไม่กระทบผู้ใช้อื่น</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-gold" id="ly-save">💾 บันทึกการตั้งค่า</button>
+          <button class="btn" id="ly-test">🖨️ พิมพ์ทดสอบ</button>
+          <button class="btn" id="ly-revert">↶ ยกเลิกการแก้ไข</button>
+          <button class="btn" id="ly-reset">↺ ค่าเริ่มต้น</button></div>
+      </div>
+    </div>
+    <div>
+      <div class="card"><div class="card-head"><h3>ปรับค่าละเอียด (มม. / ขนาดอักษร pt)</h3></div><div id="ly-form"></div></div>
+      <div class="card"><div class="card-head"><h3>โหลดการตั้งค่าจากผู้ใช้อื่น</h3></div><div id="ly-others"><div class="empty">กำลังโหลด...</div></div></div>
+      <div class="card"><div class="card-head"><h3>ประวัติการตั้งค่าของฉัน</h3></div><div id="ly-history"><div class="empty">กำลังโหลด...</div></div></div>
+    </div>
+  </div>`;
+
+  const T = () => Y.type;
+  const L = () => Y.draft[T()];
+  const size = () => envSize(T(), L());
+
+  // ---------- status bar ----------
+  const paintStatus = () => {
+    const cur = S.layouts[T()];
+    const src = cur?.source_user_name ? ` · โหลดจาก <b>${esc(cur.source_user_name)}</b>` : '';
+    $('#ly-status').innerHTML = `<span>${ENVELOPES[T()].label} — กำลังใช้: ${cur ? `<b>การตั้งค่าของคุณ</b> บันทึกเมื่อ ${fmtDT(cur.created_at)}${src}${cur.note ? ` · "${esc(cur.note)}"` : ''}` : '<b>ค่าเริ่มต้นของระบบ</b> (ยังไม่เคยบันทึก)'}</span>
+      ${Y.dirty[T()] ? '<span class="lay-dirty">● มีการแก้ไขที่ยังไม่บันทึก</span>' : ''}${Y.source[T()] ? `<span class="muted">(แก้ไขจากการตั้งค่าของ ${esc(Y.source[T()].user_name)})</span>` : ''}`;
+    $$('#ly-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.t === T()));
+  };
+
+  // ---------- preview with drag ----------
+  let k = 1;
+  const paintPreview = () => {
+    const stage = $('#ly-stage'); if (!stage) return;
+    const { w, h } = size();
+    const avail = Math.max(300, stage.clientWidth - 28);
+    k = Math.min(1.25, avail / (w * PX_PER_MM), Math.max(260, window.innerHeight - 330) / (h * PX_PER_MM));
+    stage.innerHTML = `<div class="lay-frame" style="width:${w * PX_PER_MM * k}px;height:${h * PX_PER_MM * k}px">
+      <div style="transform:scale(${k});transform-origin:top left">${renderEnvelope(SAMPLE_LETTER, S.settings, T(), L()).replace('class="env ', 'class="env on-screen ')}</div></div>`;
+    $$('[data-block]', stage).forEach((el) => { el.dataset.label = LAY_BLOCKS[el.dataset.block]; });
+  };
+  let drag = null;
+  $('#ly-stage').addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('[data-block]'); if (!el) return;
+    e.preventDefault();
+    const b = el.dataset.block;
+    drag = { el, b, px: e.clientX, py: e.clientY, x: L()[b].x, y: L()[b].y };
+    el.classList.add('dragging'); el.setPointerCapture(e.pointerId);
+  });
+  $('#ly-stage').addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const { w, h } = size();
+    const nx = Math.min(w - 5, Math.max(0, r05(drag.x + (e.clientX - drag.px) / (k * PX_PER_MM))));
+    const ny = Math.min(h - 5, Math.max(0, r05(drag.y + (e.clientY - drag.py) / (k * PX_PER_MM))));
+    L()[drag.b].x = nx; L()[drag.b].y = ny;
+    drag.el.style.left = `${nx}mm`; drag.el.style.top = `${ny}mm`;
+    const ix = $(`#ly-${drag.b}-x`), iy = $(`#ly-${drag.b}-y`); if (ix) ix.value = nx; if (iy) iy.value = ny;
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const moved = L()[drag.b].x !== drag.x || L()[drag.b].y !== drag.y;
+    drag.el.classList.remove('dragging'); drag = null;
+    if (moved) { Y.dirty[T()] = true; paintStatus(); }
+  };
+  $('#ly-stage').addEventListener('pointerup', endDrag);
+  $('#ly-stage').addEventListener('pointercancel', endDrag);
+
+  // ---------- numeric form ----------
+  const field = (g, key, label, step = 0.5) => `<label>${label}<input type="number" step="${step}" id="ly-${g}-${key}" data-g="${g}" data-k="${key}" value="${L()[g][key]}"></label>`;
+  const paintForm = () => {
+    $('#ly-form').innerHTML = `
+      ${T() === 'brown' ? `<div class="lay-group"><b>การวางซองในเครื่องพิมพ์</b>
+        <div class="seg">${[['landscape', 'แนวนอน', '10" × 8.2"'], ['portrait', 'แนวตั้ง', '8.2" × 10"']].map(([v, l, d]) => `<label><input type="radio" name="ly-orient" value="${v}" ${L().orientation === v ? 'checked' : ''}><span>${l}<small>${d}</small></span></label>`).join('')}</div></div>` : ''}
+      <div class="lay-group"><b>⇲ เลื่อนทั้งหมด (ปรับให้ตรงเครื่องพิมพ์)</b><div class="lay-grid">${field('offset', 'x', 'แนวนอน X')}${field('offset', 'y', 'แนวตั้ง Y')}</div></div>
+      <div class="lay-group"><b>ผู้ส่ง / เลขที่หนังสือ (มุมซ้ายบน)</b><div class="lay-grid">${field('sender', 'x', 'X')}${field('sender', 'y', 'Y')}${field('sender', 'size', 'ขนาดอักษร')}${field('emblem', 'h', 'ความสูงตรา')}</div></div>
+      <div class="lay-group"><b>ช่องค่าฝากส่ง <label style="display:inline-flex;gap:4px;align-items:center;margin-left:auto;font-weight:400;color:var(--text)"><input type="checkbox" id="ly-postage-show" ${L().postage.show !== false ? 'checked' : ''}> แสดง</label></b>
+        <div class="lay-grid">${field('postage', 'x', 'X')}${field('postage', 'y', 'Y')}${field('postage', 'w', 'กว้าง')}${field('postage', 'size', 'ขนาดอักษร')}</div></div>
+      <div class="lay-group"><b>ผู้รับ (เรียน / ที่อยู่ / รหัสไปรษณีย์)</b><div class="lay-grid">${field('recipient', 'x', 'X')}${field('recipient', 'y', 'Y')}${field('recipient', 'w', 'กว้าง')}${field('recipient', 'size', 'ขนาดอักษร')}</div></div>
+      <label>หมายเหตุเมื่อบันทึก (เช่น เครื่องพิมพ์ที่ใช้)<input id="ly-note" placeholder="เช่น HP LaserJet ห้องสารบรรณ" value="${esc(Y.note || '')}"></label>`;
+  };
+  $('#ly-form').addEventListener('input', (e) => {
+    const t = e.target;
+    if (t.id === 'ly-note') { Y.note = t.value; return; }
+    if (t.dataset.g) {
+      const v = Number(t.value);
+      if (Number.isFinite(v)) { L()[t.dataset.g][t.dataset.k] = v; Y.dirty[T()] = true; paintPreview(); paintStatus(); }
+    }
+    if (t.id === 'ly-postage-show') { L().postage.show = t.checked; Y.dirty[T()] = true; paintPreview(); paintStatus(); }
+  });
+  $('#ly-form').addEventListener('change', async (e) => {
+    if (e.target.name !== 'ly-orient' || e.target.value === L().orientation) return;
+    const go = await ask('เปลี่ยนการวางซองน้ำตาล?', 'ตำแหน่งข้อความจะถูกตั้งเป็นค่าเริ่มต้นของแนวใหม่ (ยังไม่บันทึกจนกว่าจะกด "บันทึกการตั้งค่า")');
+    if (go) { Y.draft.brown = defaultLayout('brown', e.target.value); Y.dirty.brown = true; }
+    paintAll();
+  });
+
+  // ---------- save / load ----------
+  const save = async (layout, note, source = null) => {
+    const row = await must(S.sb.from('envelope_layouts').insert({
+      user_id: S.profile.id, user_name: S.profile.full_name || S.profile.email, envelope: T(), layout,
+      note: note || null, source_layout_id: source?.id || null, source_user_name: source?.user_name || null,
+    }).select().single());
+    S.layouts[T()] = row; Y.draft[T()] = clone(resolveLayout(T(), S.settings, row.layout)); Y.dirty[T()] = false; Y.source[T()] = null; Y.note = '';
+    return row;
+  };
+  $('#ly-save').addEventListener('click', async () => {
+    try {
+      const row = await save(clone(L()), (Y.note || '').trim(), Y.source[T()]);
+      Swal.fire({ icon: 'success', title: 'บันทึกการตั้งค่าแล้ว', html: `${ENVELOPES[T()].label} · ${fmtDT(row.created_at)}<br><span class="muted">ใช้กับการพิมพ์ซองของคุณตั้งแต่ตอนนี้</span>`, timer: 2200, showConfirmButton: false });
+      paintAll();
+    } catch (er) { fail(er); }
+  });
+  $('#ly-revert').addEventListener('click', () => { Y.draft[T()] = clone(myLayout(T())); Y.dirty[T()] = false; Y.source[T()] = null; paintAll(); });
+  $('#ly-reset').addEventListener('click', async () => {
+    if (!(await ask('คืนค่าเริ่มต้น?', 'ตำแหน่งทั้งหมดจะกลับเป็นค่าเริ่มต้นของระบบ (ยังไม่บันทึกจนกว่าจะกด "บันทึกการตั้งค่า")'))) return;
+    Y.draft[T()] = defaultLayout(T(), L().orientation); Y.dirty[T()] = true; paintAll();
+  });
+  $('#ly-test').addEventListener('click', () => printLetters([SAMPLE_LETTER], T(), S.settings, { markPrinted: false, layout: L() }));
+
+  const previewOf = (layout, title) => Swal.fire({ title, width: 'min(900px, 96vw)', html: previewHtml([SAMPLE_LETTER], T(), S.settings, 1, 820, resolveLayout(T(), S.settings, layout)), confirmButtonText: 'ปิด' });
+
+  const loadLists = async () => {
+    const [others, mine] = await Promise.all([
+      must(S.sb.from('envelope_layouts').select('*').eq('envelope', T()).neq('user_id', S.profile.id).order('created_at', { ascending: false }).limit(300)),
+      must(S.sb.from('envelope_layouts').select('*').eq('envelope', T()).eq('user_id', S.profile.id).order('created_at', { ascending: false }).limit(50)),
+    ]);
+    // latest version of each other user
+    const latest = []; const seen = new Map();
+    for (const r of others) { if (!seen.has(r.user_id)) { seen.set(r.user_id, 1); latest.push(r); } else seen.set(r.user_id, seen.get(r.user_id) + 1); }
+    $('#ly-others').innerHTML = latest.length ? `<div class="table-wrap"><table><thead><tr><th>ผู้ใช้</th><th>บันทึกล่าสุด</th><th>หมายเหตุ</th><th></th></tr></thead><tbody>
+      ${latest.map((r) => `<tr data-id="${r.id}"><td><b>${esc(r.user_name || '')}</b>${seen.get(r.user_id) > 1 ? `<div class="muted" style="font-size:17px">${seen.get(r.user_id)} เวอร์ชัน</div>` : ''}</td>
+        <td style="white-space:nowrap">${fmtDT(r.created_at)}</td><td>${esc(r.note || '')}${r.layout.orientation === 'portrait' ? ' <span class="badge b-brown">แนวตั้ง</span>' : ''}</td>
+        <td class="actions"><button class="btn btn-sm" data-act="view">ดู</button><button class="btn btn-sm btn-primary" data-act="use">ใช้การตั้งค่านี้</button></td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty">ยังไม่มีผู้ใช้อื่นบันทึกการตั้งค่า${ENVELOPES[T()].label}</div>`;
+    $('#ly-others')._rows = latest;
+    $('#ly-history').innerHTML = mine.length ? `<div class="table-wrap" style="max-height:360px"><table><thead><tr><th>บันทึกเมื่อ</th><th>หมายเหตุ / ที่มา</th><th></th></tr></thead><tbody>
+      ${mine.map((r, i) => `<tr data-id="${r.id}"><td style="white-space:nowrap">${fmtDT(r.created_at)} ${i === 0 ? '<span class="badge b-printed">ใช้อยู่</span>' : ''}</td>
+        <td>${esc(r.note || '')}${r.source_user_name ? `<div class="muted" style="font-size:17px">โหลดจาก ${esc(r.source_user_name)}</div>` : ''}</td>
+        <td class="actions"><button class="btn btn-sm" data-act="view">ดู</button>${i ? '<button class="btn btn-sm" data-act="restore">ใช้เวอร์ชันนี้</button>' : ''}<button class="btn btn-sm btn-danger" data-act="del">ลบ</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">ยังไม่เคยบันทึก — กำลังใช้ค่าเริ่มต้นของระบบ</div>';
+    $('#ly-history')._rows = mine;
+  };
+
+  $('#ly-others').addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act; if (!act) return;
+    const r = $('#ly-others')._rows.find((x) => x.id === Number(e.target.closest('tr').dataset.id));
+    if (act === 'view') return previewOf(r.layout, `การตั้งค่าของ ${r.user_name} · ${fmtDT(r.created_at)}`);
+    if (!(await ask(`ใช้การตั้งค่าของ ${esc(r.user_name)}?`, `${ENVELOPES[T()].label} บันทึกเมื่อ ${fmtDT(r.created_at)}${r.note ? `<br>"${esc(r.note)}"` : ''}<br><span class="muted">ระบบจะบันทึกเป็นการตั้งค่าของคุณทันที (ของเดิมยังอยู่ในประวัติ)</span>`, { confirmButtonText: 'โหลดและบันทึกเป็นของฉัน' }))) return;
+    try {
+      await save(clone(resolveLayout(T(), S.settings, r.layout)), `โหลดจาก ${r.user_name}${r.note ? ` (${r.note})` : ''}`, r);
+      ok(`โหลดการตั้งค่าของ ${r.user_name} แล้ว`); paintAll();
+    } catch (er) { fail(er); }
+  });
+  $('#ly-history').addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act; if (!act) return;
+    const r = $('#ly-history')._rows.find((x) => x.id === Number(e.target.closest('tr').dataset.id));
+    if (act === 'view') return previewOf(r.layout, `เวอร์ชัน ${fmtDT(r.created_at)}`);
+    try {
+      if (act === 'restore') { await save(clone(resolveLayout(T(), S.settings, r.layout)), `กลับไปใช้เวอร์ชัน ${fmtDT(r.created_at)}`); ok('กลับไปใช้เวอร์ชันนี้แล้ว'); }
+      if (act === 'del') {
+        if (!(await ask('ลบเวอร์ชันนี้?', fmtDT(r.created_at), { icon: 'warning', confirmButtonColor: '#c0392b', confirmButtonText: 'ลบ' }))) return;
+        await must(S.sb.from('envelope_layouts').delete().eq('id', r.id));
+        await loadMyLayouts(); if (!Y.dirty[T()]) Y.draft[T()] = clone(myLayout(T()));
+        ok('ลบแล้ว');
+      }
+      paintAll();
+    } catch (er) { fail(er); }
+  });
+
+  $('#ly-tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-t]'); if (!b) return; Y.type = b.dataset.t; paintAll(); });
+  const paintAll = () => { paintStatus(); paintForm(); paintPreview(); loadLists().catch((er) => { $('#ly-others').innerHTML = `<div class="empty">${esc(thaiError(er))}</div>`; }); };
+  paintAll();
 }
 
 boot().catch((e) => { console.error(e); show('#login-screen'); fail(e); });
