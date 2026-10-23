@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ระบบพิมพ์ซองจดหมาย | Envelope Printing System</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preload" href="/fonts/THSarabunPSK-Regular.woff" as="font" type="font/woff" crossorigin>
+  <link rel="preload" href="/fonts/THSarabunPSK-Bold.woff" as="font" type="font/woff" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11.14.5/dist/sweetalert2.min.css">
+  <link rel="stylesheet" href="/assets/style.css">
+  <style id="print-page-style">@page { size: 234.95mm 107.95mm; margin: 0; }</style>
+</head>
+<body>
+  <!-- ============ Boot / config error ============ -->
+  <div id="boot" class="boot"><div class="spinner"></div></div>
+
+  <!-- ============ Login ============ -->
+  <main id="login-screen" class="login hidden">
+    <div class="login-card">
+      <img src="/assets/logo.png" alt="ระบบพิมพ์ซองจดหมาย" class="login-logo">
+      <form id="login-form" autocomplete="on">
+        <label>อีเมล<input type="email" name="email" required autocomplete="username" placeholder="name@example.com"></label>
+        <label>รหัสผ่าน<input type="password" name="password" required autocomplete="current-password" placeholder="••••••••"></label>
+        <button class="btn btn-primary btn-block" type="submit">เข้าสู่ระบบ</button>
+      </form>
+      <p class="login-foot">ยังไม่มีบัญชี? <a href="#" id="link-register">ขอสิทธิ์ใช้งาน</a></p>
+      <p class="login-foot" style="margin-top:6px"><a href="#" id="link-conn">⚙️ ตั้งค่าการเชื่อมต่อ Supabase</a></p>
+    </div>
+  </main>
+
+  <!-- ============ Waiting for approval ============ -->
+  <main id="pending-screen" class="login hidden">
+    <div class="login-card">
+      <img src="/assets/logo.png" alt="" class="login-logo">
+      <h2>รอผู้ดูแลระบบอนุมัติ</h2>
+      <p class="muted">บัญชี <b id="pending-email"></b> ยังไม่ได้รับสิทธิ์ใช้งาน<br>กรุณาติดต่อผู้ดูแลระบบเพื่อเปิดใช้งาน</p>
+      <button class="btn btn-ghost btn-block" data-action="logout">ออกจากระบบ</button>
+    </div>
+  </main>
+
+  <!-- ============ App ============ -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <img src="/assets/logo.png" alt="">
+        <div><b>ระบบพิมพ์ซองจดหมาย</b><small id="brand-org"></small></div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="me">
+        <div class="me-name" id="me-name"></div>
+        <div class="me-role" id="me-role"></div>
+        <button class="btn btn-ghost btn-sm" data-action="logout">ออกจากระบบ</button>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menu-btn" aria-label="เมนู">☰</button>
+        <h1 id="page-title"></h1>
+        <div class="topbar-right" id="topbar-right"></div>
+      </header>
+      <section id="view" class="view"></section>
+    </div>
+  </div>
+
+  <!-- envelopes are rendered here only while printing -->
+  <div id="print-root"></div>
+
+  <script src="/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.14.5/dist/sweetalert2.all.min.js"></script>
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>
