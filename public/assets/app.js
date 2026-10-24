@@ -3,7 +3,7 @@
 //  Vanilla JS + Supabase + SweetAlert2 (no build step)
 // =====================================================================
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
-import { ENVELOPES, esc, renderEnvelope, pageCss, envSize, areaLine, SAMPLE_LETTER, resolveLayout, defaultLayout } from './envelope.js';
+import { ENVELOPES, ITEM_DEFS, itemDef, esc, renderEnvelope, fitEnvelopeText, pageCss, envSize, areaLine, SAMPLE_LETTER, resolveLayout, defaultLayout } from './envelope.js';
 
 const CFG = window.APP_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
@@ -542,7 +542,7 @@ async function viewRegister() {
       <button class="btn btn-sm" id="r-pick-unprinted">เลือกเฉพาะที่ยังไม่พิมพ์</button>
       <span class="spacer"></span>
       ${envSeg('r-env', R.envelope)}
-      <button class="btn" id="r-preview">👁 ดูตัวอย่าง</button>
+      <button class="btn" id="r-preview">👁 ตัวอย่างขนาดจริง</button>
       <button class="btn btn-primary" id="r-print">🖨️ พิมพ์ซองที่เลือก</button>
     </div>
   </div>`;
@@ -662,22 +662,53 @@ async function editLetter(r) {
 // ---------------------------------------------------------------------
 //  Printing
 // ---------------------------------------------------------------------
-async function waitForPrintAssets(root) {
-  try { await document.fonts.ready; } catch { /* ignore */ }
-  await Promise.all($$('img', root).map((img) => (img.complete ? null : img.decode().catch(() => null))));
+// ---------------------------------------------------------------------
+//  Printing — a clean, separate print document (hidden iframe):
+//  exact envelope page size, zero margins, blank title → no browser
+//  header/footer (URL, date, page title) is printed.
+// ---------------------------------------------------------------------
+const SKIP_PREVIEW_KEY = 'envelope.print.skipPreview';
+const skipPreview = () => { try { return localStorage.getItem(SKIP_PREVIEW_KEY) === '1'; } catch { return false; } };
+const setSkipPreview = (v) => { try { v ? localStorage.setItem(SKIP_PREVIEW_KEY, '1') : localStorage.removeItem(SKIP_PREVIEW_KEY); } catch { /* ignore */ } };
+
+async function waitForPrintAssets(root, doc = document) {
+  try { await doc.fonts.ready; } catch { /* ignore */ }
+  await Promise.all([...root.querySelectorAll('img')].map((img) => (img.complete ? null : img.decode().catch(() => null))));
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 }
 
-async function printLetters(rows, type, settings = S.settings, { markPrinted = true, layout = null } = {}) {
+/** Print `bodyHtml` in its own document with the given @page CSS. */
+async function printDocument(bodyHtml, pageRule, extraCss = '') {
+  document.getElementById('print-frame')?.remove();
+  const f = document.createElement('iframe');
+  f.id = 'print-frame';
+  f.setAttribute('aria-hidden', 'true');
+  f.style.cssText = 'position:fixed;left:-20000px;top:0;width:1400px;height:1000px;border:0;';
+  const html = `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>&#8203;</title>
+    <base href="${location.origin}/"><link rel="stylesheet" href="/assets/style.css">
+    <style id="print-page-style">${pageRule}</style>
+    <style>html,body{margin:0;padding:0;background:#fff}#print-root{display:block!important}${extraCss}</style></head>
+    <body class="print-doc"><div id="print-root">${bodyHtml}</div></body></html>`;
+  const loaded = new Promise((r) => { f.onload = r; });
+  f.srcdoc = html;
+  document.body.appendChild(f);
+  await loaded;
+  const d = f.contentDocument;
+  await waitForPrintAssets(d.body, d);
+  fitEnvelopeText(d);
+  f.contentWindow.focus();
+  f.contentWindow.print(); // blocks until the print dialog closes
+}
+
+async function printLetters(rows, type, settings = S.settings, { markPrinted = true, layout = null, preview = true } = {}) {
   rows = (rows || []).filter((r) => r.status !== 'cancelled');
   if (!rows.length) return warn('ไม่มีรายการที่พิมพ์ได้');
-  const root = $('#print-root');
   const L = layout || myLayout(type, settings);
-  root.innerHTML = rows.map((r) => renderEnvelope(r, settings, type, L)).join('');
-  $('#print-page-style').textContent = pageCss(type, L);
-  await waitForPrintAssets(root);
-  window.print();
-  root.innerHTML = '';
+  if (preview && !skipPreview()) {
+    const go = await realSizePreview(rows, type, settings, L);
+    if (!go) return;
+  }
+  await printDocument(rows.map((r) => renderEnvelope(r, settings, type, L)).join(''), pageCss(type, L));
   if (!markPrinted) return;
   const env = ENVELOPES[type];
   const res = await Swal.fire({
@@ -687,6 +718,77 @@ async function printLetters(rows, type, settings = S.settings, { markPrinted = t
   });
   if (!res.isConfirmed) return;
   try { await must(S.sb.rpc('mark_printed', { p_ids: rows.map((r) => r.id), p_envelope: type })); ok(`บันทึกการพิมพ์ ${rows.length} ซองแล้ว`); } catch (e) { fail(e); }
+}
+
+/** Full-screen preview at REAL size (100% = actual millimetres). Resolves true = print. */
+function realSizePreview(rows, type, settings, L) {
+  return new Promise((resolve) => {
+    const env = ENVELOPES[type];
+    const { w, h } = envSize(type, L);
+    const inch = (mm) => (mm / 25.4).toFixed(2).replace(/\.?0+$/, '');
+    const MAX = 40;
+    const el = document.createElement('div');
+    el.className = 'rsp';
+    el.innerHTML = `
+      <div class="rsp-bar">
+        <h2>ตัวอย่างก่อนพิมพ์ — ขนาดจริง</h2>
+        <span class="badge b-${type}">${env.label}</span>
+        <b>${w.toFixed(1)} × ${h.toFixed(1)} มม.</b><span class="muted">(${inch(w)}" × ${inch(h)}"${type === 'brown' ? ` · ${L.orientation === 'portrait' ? 'แนวตั้ง' : 'แนวนอน'}` : ''})</span>
+        <span class="spacer"></span>
+        <div class="seg"><label><input type="radio" name="rsp-z" value="1" checked><span>ขนาดจริง 100%</span></label><label><input type="radio" name="rsp-z" value="fit"><span>พอดีหน้าจอ</span></label></div>
+        <button class="btn" data-x="cancel">ยกเลิก</button>
+        <button class="btn btn-primary" data-x="print">🖨️ พิมพ์ ${rows.length} ซอง</button>
+      </div>
+      <div class="rsp-body"></div>
+      <div class="rsp-foot">
+        <div class="tips">ก่อนกดพิมพ์ในหน้าต่างของเบราว์เซอร์: เลือก<b>เครื่องพิมพ์จริง</b> (ไม่ใช่ PDF) · ขนาดกระดาษ <b>${inch(w)} × ${inch(h)} นิ้ว</b> · ขอบกระดาษ <b>ไม่มี (None)</b> · มาตราส่วน <b>100%</b> · ปิด <b>หัวกระดาษและท้ายกระดาษ</b></div>
+        <a href="#" data-x="guide">วิธีพิมพ์ตรงไปที่เครื่องพิมพ์ทันที (ไม่ต้องผ่านหน้าต่างพิมพ์)</a>
+        <label style="display:flex;gap:6px;align-items:center;color:var(--text);margin:0"><input type="checkbox" data-x="skip"> ครั้งต่อไปพิมพ์ทันที ไม่ต้องแสดงตัวอย่าง</label>
+      </div>`;
+    const body = $('.rsp-body', el);
+    body.innerHTML = rows.slice(0, MAX).map((r, i) => `
+      <div class="rsp-wrap"><div class="rsp-cap"><span>ซองที่ ${i + 1} / ${rows.length}</span><span>${esc(r.doc_number || '')} · ${esc(r.recipient_name || '')}</span></div>
+        <div class="rsp-page" style="width:${w}mm"><div class="rsp-ruler"></div>${renderEnvelope(r, settings, type, L)}
+          <div class="rsp-dim-w">${w.toFixed(1)} มม. (${inch(w)}")</div><div class="rsp-dim-h">${h.toFixed(1)} มม.</div></div></div>`).join('')
+      + (rows.length > MAX ? `<div class="rsp-cap">… และอีก ${rows.length - MAX} ซอง (พิมพ์ครบทุกซอง)</div>` : '');
+    document.body.appendChild(el);
+    document.fonts.ready.then(() => fitEnvelopeText(body));
+    const zoom = (z) => {
+      const k = z === 'fit' ? Math.min(1, (body.clientWidth - 90) / (w * 3.7795), (body.clientHeight - 90) / ((h + 9) * 3.7795)) : 1;
+      $$('.rsp-wrap', body).forEach((p) => { p.style.zoom = k; });
+    };
+    el.addEventListener('change', (e) => {
+      if (e.target.name === 'rsp-z') zoom(e.target.value);
+      if (e.target.dataset.x === 'skip') setSkipPreview(e.target.checked);
+    });
+    const close = (v) => { el.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); };
+    document.addEventListener('keydown', onKey);
+    el.addEventListener('click', (e) => {
+      const x = e.target.closest('[data-x]')?.dataset.x;
+      if (x === 'cancel') close(false);
+      if (x === 'print') close(true);
+      if (x === 'guide') { e.preventDefault(); directPrintGuide(); }
+    });
+  });
+}
+
+function directPrintGuide() {
+  const app = location.origin;
+  Swal.fire({
+    title: 'พิมพ์ซองตรงไปที่เครื่องพิมพ์ทันที', width: 760, confirmButtonText: 'เข้าใจแล้ว',
+    html: `<div style="font-size:19px;line-height:1.5">
+      <p style="margin-top:0">เบราว์เซอร์จะเปิดหน้าต่างพิมพ์เสมอเพื่อความปลอดภัย ถ้าต้องการให้กด "พิมพ์" แล้ว<b>ออกเครื่องพิมพ์ทันที</b> (ไม่ผ่าน PDF Printer ไม่มีหัว/ท้ายกระดาษ) ให้ตั้งค่าครั้งเดียวที่เครื่องนี้:</p>
+      <ol style="padding-left:22px;margin:0">
+        <li><b>ตั้งเครื่องพิมพ์ซองเป็นเครื่องหลัก (Default)</b> — Windows: Settings → Bluetooth &amp; devices → Printers → เลือกเครื่อง → Set as default (ปิด "Let Windows manage my default printer")</li>
+        <li><b>ตั้งขนาดกระดาษของเครื่องพิมพ์</b> — Printing preferences → Paper size เป็น Envelope / Custom <b>9.25 × 4.25 นิ้ว</b> (ซองขาว) หรือ <b>10 × 8.2 นิ้ว</b> (ซองน้ำตาล), ถาดป้อน = Manual / Envelope feeder</li>
+        <li><b>สร้าง shortcut เปิดระบบแบบพิมพ์ตรง</b> — คลิกขวาที่ Desktop → New → Shortcut แล้ววาง:<br>
+          <code style="display:block;background:#f3f5fa;padding:6px 8px;border-radius:6px;word-break:break-all;margin:4px 0">"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --kiosk-printing ${esc(app)}</code>
+          (Microsoft Edge ใช้ <code>"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" --kiosk-printing ${esc(app)}</code>)</li>
+        <li>ปิด Chrome/Edge ทุกหน้าต่างก่อน แล้วเปิดระบบจาก shortcut นี้ — กด "พิมพ์" ซองจะออกเครื่องพิมพ์หลักทันทีตามขนาดซองจริง</li>
+      </ol>
+      <p class="muted" style="margin-bottom:0">ระบบส่งขนาดหน้าเท่ากับซองจริง (ขอบ 0) ให้เครื่องพิมพ์ทุกครั้ง · ถ้าตำแหน่งเยื้อง ปรับที่เมนู "ตั้งค่าตำแหน่งบนซอง" → เลื่อนทั้งหมด X/Y</p></div>`,
+  });
 }
 
 function previewHtml(rows, type, settings = S.settings, max = 6, maxW = 820, layout = null) {
@@ -700,16 +802,13 @@ function previewHtml(rows, type, settings = S.settings, max = 6, maxW = 820, lay
     </div>`).join('');
   return `<div class="preview-box">${items}${rows.length > max ? `<div class="muted">… และอีก ${rows.length - max} ซอง</div>` : ''}</div>`;
 }
+const fitLater = (root) => document.fonts.ready.then(() => fitEnvelopeText(root));
 
 async function previewLetters(rows, type, after) {
   rows = rows.filter((r) => r.status !== 'cancelled');
   if (!rows.length) return warn('กรุณาเลือกรายการ');
-  const env = ENVELOPES[type];
-  const r = await Swal.fire({
-    title: `ตัวอย่าง ${env.label} ${env.size} (${rows.length} ซอง)`, width: 'min(940px, 96vw)', html: previewHtml(rows, type),
-    showCancelButton: true, confirmButtonText: '🖨️ พิมพ์', cancelButtonText: 'ปิด', reverseButtons: true,
-  });
-  if (r.isConfirmed) { await printLetters(rows, type); after?.(); }
+  const L = myLayout(type);
+  if (await realSizePreview(rows, type, S.settings, L)) { await printLetters(rows, type, S.settings, { layout: L, preview: false }); after?.(); }
 }
 
 // =====================================================================
@@ -1083,7 +1182,7 @@ async function viewSettings() {
     return d;
   };
   const envType = () => $('input[name="s-env"]:checked').value;
-  const refresh = () => { $('#s-preview').innerHTML = previewHtml([SAMPLE_LETTER], envType(), collect(), 1, $('#s-preview').clientWidth || 600); };
+  const refresh = () => { $('#s-preview').innerHTML = previewHtml([SAMPLE_LETTER], envType(), collect(), 1, $('#s-preview').clientWidth || 600); fitLater($('#s-preview')); };
   view().addEventListener('input', debounce(refresh, 200));
   view().addEventListener('change', refresh);
   $('#s-emblem').addEventListener('change', async (e) => {
@@ -1355,12 +1454,11 @@ function bindTooltip(root, rows, series, labelOf) {
 }
 
 async function printReport(html) {
-  const root = $('#print-root');
-  root.innerHTML = `<section class="report-page">${html}</section>`;
-  $('#print-page-style').textContent = '@page { size: A4 portrait; margin: 15mm 15mm 15mm 20mm; }';
-  await waitForPrintAssets(root);
-  window.print();
-  root.innerHTML = '';
+  // margins come from repeating spacer rows (not @page margins) so no browser header/footer is printed
+  const body = `<table class="page-wrap"><thead><tr><td><div style="height:14mm"></div></td></tr></thead>
+    <tbody><tr><td><section class="report-page">${html}</section></td></tr></tbody>
+    <tfoot><tr><td><div style="height:12mm"></div></td></tr></tfoot></table>`;
+  await printDocument(body, '@page { size: A4 portrait; margin: 0; }', 'body{padding:0 15mm 0 20mm}.page-wrap{width:100%;border-collapse:collapse}.page-wrap>thead>tr>td,.page-wrap>tfoot>tr>td,.page-wrap>tbody>tr>td{padding:0;border:0}');
 }
 
 function saveBlob(blob, name) {
@@ -1567,19 +1665,21 @@ async function viewConnection() {
 
 // =====================================================================
 //  ตั้งค่าตำแหน่งบนซอง — per-user layout editor (white / brown separately)
-//  • drag blocks on the preview or type exact millimetres
-//  • every save = new version (date/time + user)  → history
+//  • every line on the envelope is its own item: show/hide, move, width,
+//    font size, bold, wrap; add / delete custom text items
+//  • drag on the preview, arrow keys to nudge (Shift = 5 mm)
+//  • every save = new version (date/time + user) → history
 //  • load another user's layout and save it as your own in one click
 // =====================================================================
-const LAY_BLOCKS = { sender: 'ผู้ส่ง / เลขที่หนังสือ', postage: 'ช่องค่าฝากส่ง', recipient: 'ผู้รับ' };
 const PX_PER_MM = 3.7795;
 const r05 = (n) => Math.round(n * 2) / 2;
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const fmtDT = (d) => `${fmtDate(d)} ${fmtTime(d)} น.`;
+const itemLabel = (key, it) => (key.startsWith('custom_') ? `ข้อความ: ${it?.text ? it.text.split('\n')[0].slice(0, 18) : '(ว่าง)'}` : itemDef(key).label);
 
 async function viewLayout() {
   await loadMyLayouts();
-  S.lay = S.lay || { type: 'white', draft: {}, dirty: {}, source: {} };
+  S.lay = S.lay || { type: 'white', draft: {}, dirty: {}, source: {}, sel: null };
   const Y = S.lay;
   for (const t of ['white', 'brown']) if (!Y.draft[t] || !Y.dirty[t]) { Y.draft[t] = clone(myLayout(t)); Y.dirty[t] = false; Y.source[t] = null; }
 
@@ -1589,18 +1689,21 @@ async function viewLayout() {
   <div class="lay-cols">
     <div class="lay-left">
       <div class="card">
-        <div class="card-head"><h3>ตัวอย่างซอง — ลากกล่องเพื่อย้าย</h3></div>
-        <div class="lay-stage" id="ly-stage"></div>
-        <p class="muted" style="margin:8px 0 10px;font-size:18px">ลากกล่องเส้นประ (ผู้ส่ง · ช่องค่าฝากส่ง · ผู้รับ) หรือพิมพ์ค่าเป็นมิลลิเมตรด้านขวา วัดจากมุมซ้ายบนของซอง · การตั้งค่านี้เป็นของคุณคนเดียว ไม่กระทบผู้ใช้อื่น</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="card-head"><h3>ตัวอย่างซอง — ลากแต่ละรายการเพื่อย้าย</h3></div>
+        <div class="lay-stage" id="ly-stage" tabindex="0"></div>
+        <p class="muted" style="margin:8px 0 10px;font-size:18px">คลิกเลือกรายการ แล้ว<b>ลาก</b> หรือกด<b>ลูกศร</b>บนแป้นพิมพ์เพื่อขยับทีละ 0.5 มม. (กด Shift ค้าง = 5 มม.) · ซ่อน/ลบรายการได้ที่ตารางด้านขวา · การตั้งค่านี้เป็นของคุณคนเดียว</p>
+        <div id="ly-global"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
           <button class="btn btn-gold" id="ly-save">💾 บันทึกการตั้งค่า</button>
-          <button class="btn" id="ly-test">🖨️ พิมพ์ทดสอบ</button>
+          <button class="btn" id="ly-test">🖨️ พิมพ์ทดสอบ (ขนาดจริง)</button>
           <button class="btn" id="ly-revert">↶ ยกเลิกการแก้ไข</button>
           <button class="btn" id="ly-reset">↺ ค่าเริ่มต้น</button></div>
       </div>
     </div>
     <div>
-      <div class="card"><div class="card-head"><h3>ปรับค่าละเอียด (มม. / ขนาดอักษร pt)</h3></div><div id="ly-form"></div></div>
+      <div class="card"><div class="card-head"><h3>รายการบนซอง</h3><button class="btn btn-sm" id="ly-add">+ เพิ่มข้อความ</button></div>
+        <div class="lay-tbl-wrap" id="ly-items"></div>
+        <label style="margin-top:10px">หมายเหตุเมื่อบันทึก (เช่น เครื่องพิมพ์ที่ใช้)<input id="ly-note" placeholder="เช่น HP LaserJet ห้องสารบรรณ"></label></div>
       <div class="card"><div class="card-head"><h3>โหลดการตั้งค่าจากผู้ใช้อื่น</h3></div><div id="ly-others"><div class="empty">กำลังโหลด...</div></div></div>
       <div class="card"><div class="card-head"><h3>ประวัติการตั้งค่าของฉัน</h3></div><div id="ly-history"><div class="empty">กำลังโหลด...</div></div></div>
     </div>
@@ -1609,81 +1712,154 @@ async function viewLayout() {
   const T = () => Y.type;
   const L = () => Y.draft[T()];
   const size = () => envSize(T(), L());
+  const keysOf = () => [...ITEM_DEFS.map((d) => d.key), ...Object.keys(L().items).filter((k) => k.startsWith('custom_'))];
+  const touch = () => { Y.dirty[T()] = true; paintStatus(); };
 
   // ---------- status bar ----------
   const paintStatus = () => {
     const cur = S.layouts[T()];
     const src = cur?.source_user_name ? ` · โหลดจาก <b>${esc(cur.source_user_name)}</b>` : '';
     $('#ly-status').innerHTML = `<span>${ENVELOPES[T()].label} — กำลังใช้: ${cur ? `<b>การตั้งค่าของคุณ</b> บันทึกเมื่อ ${fmtDT(cur.created_at)}${src}${cur.note ? ` · "${esc(cur.note)}"` : ''}` : '<b>ค่าเริ่มต้นของระบบ</b> (ยังไม่เคยบันทึก)'}</span>
-      ${Y.dirty[T()] ? '<span class="lay-dirty">● มีการแก้ไขที่ยังไม่บันทึก</span>' : ''}${Y.source[T()] ? `<span class="muted">(แก้ไขจากการตั้งค่าของ ${esc(Y.source[T()].user_name)})</span>` : ''}`;
+      ${Y.dirty[T()] ? '<span class="lay-dirty">● มีการแก้ไขที่ยังไม่บันทึก</span>' : ''}`;
     $$('#ly-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.t === T()));
   };
 
-  // ---------- preview with drag ----------
+  // ---------- preview with drag & keyboard ----------
   let k = 1;
   const paintPreview = () => {
     const stage = $('#ly-stage'); if (!stage) return;
     const { w, h } = size();
     const avail = Math.max(300, stage.clientWidth - 28);
-    k = Math.min(1.25, avail / (w * PX_PER_MM), Math.max(260, window.innerHeight - 330) / (h * PX_PER_MM));
+    k = Math.min(1.25, avail / (w * PX_PER_MM), Math.max(260, window.innerHeight - 380) / (h * PX_PER_MM));
     stage.innerHTML = `<div class="lay-frame" style="width:${w * PX_PER_MM * k}px;height:${h * PX_PER_MM * k}px">
-      <div style="transform:scale(${k});transform-origin:top left">${renderEnvelope(SAMPLE_LETTER, S.settings, T(), L()).replace('class="env ', 'class="env on-screen ')}</div></div>`;
-    $$('[data-block]', stage).forEach((el) => { el.dataset.label = LAY_BLOCKS[el.dataset.block]; });
+      <div style="transform:scale(${k});transform-origin:top left">${renderEnvelope(SAMPLE_LETTER, S.settings, T(), L(), { editor: true }).replace('class="env ', 'class="env on-screen ')}</div></div>`;
+    $$('[data-block]', stage).forEach((el) => { el.dataset.label = itemLabel(el.dataset.block, L().items[el.dataset.block]); el.classList.toggle('sel', el.dataset.block === Y.sel); });
+    fitLater(stage);
+  };
+  const select = (key) => {
+    Y.sel = key;
+    $$('#ly-stage [data-block]').forEach((el) => el.classList.toggle('sel', el.dataset.block === key));
+    $$('#ly-items tr[data-key]').forEach((tr) => tr.classList.toggle('sel', tr.dataset.key === key));
+  };
+  const syncRow = (key) => {
+    const it = L().items[key];
+    const ix = $(`#ly-items tr[data-key="${key}"] input[data-p="x"]`), iy = $(`#ly-items tr[data-key="${key}"] input[data-p="y"]`);
+    if (ix) ix.value = it.x; if (iy) iy.value = it.y;
   };
   let drag = null;
   $('#ly-stage').addEventListener('pointerdown', (e) => {
-    const el = e.target.closest('[data-block]'); if (!el) return;
+    const el = e.target.closest('[data-block]');
+    if (!el) return select(null);
     e.preventDefault();
-    const b = el.dataset.block;
-    drag = { el, b, px: e.clientX, py: e.clientY, x: L()[b].x, y: L()[b].y };
+    const key = el.dataset.block; select(key);
+    drag = { el, key, px: e.clientX, py: e.clientY, x: L().items[key].x, y: L().items[key].y };
     el.classList.add('dragging'); el.setPointerCapture(e.pointerId);
+    $('#ly-stage').focus({ preventScroll: true });
   });
   $('#ly-stage').addEventListener('pointermove', (e) => {
     if (!drag) return;
     const { w, h } = size();
-    const nx = Math.min(w - 5, Math.max(0, r05(drag.x + (e.clientX - drag.px) / (k * PX_PER_MM))));
-    const ny = Math.min(h - 5, Math.max(0, r05(drag.y + (e.clientY - drag.py) / (k * PX_PER_MM))));
-    L()[drag.b].x = nx; L()[drag.b].y = ny;
-    drag.el.style.left = `${nx}mm`; drag.el.style.top = `${ny}mm`;
-    const ix = $(`#ly-${drag.b}-x`), iy = $(`#ly-${drag.b}-y`); if (ix) ix.value = nx; if (iy) iy.value = ny;
+    const it = L().items[drag.key];
+    it.x = Math.min(w - 3, Math.max(0, r05(drag.x + (e.clientX - drag.px) / (k * PX_PER_MM))));
+    it.y = Math.min(h - 3, Math.max(0, r05(drag.y + (e.clientY - drag.py) / (k * PX_PER_MM))));
+    drag.el.style.left = `${it.x}mm`; drag.el.style.top = `${it.y}mm`;
+    syncRow(drag.key);
   });
   const endDrag = () => {
     if (!drag) return;
-    const moved = L()[drag.b].x !== drag.x || L()[drag.b].y !== drag.y;
+    const it = L().items[drag.key];
+    const moved = it.x !== drag.x || it.y !== drag.y;
     drag.el.classList.remove('dragging'); drag = null;
-    if (moved) { Y.dirty[T()] = true; paintStatus(); }
+    if (moved) touch();
   };
   $('#ly-stage').addEventListener('pointerup', endDrag);
   $('#ly-stage').addEventListener('pointercancel', endDrag);
-
-  // ---------- numeric form ----------
-  const field = (g, key, label, step = 0.5) => `<label>${label}<input type="number" step="${step}" id="ly-${g}-${key}" data-g="${g}" data-k="${key}" value="${L()[g][key]}"></label>`;
-  const paintForm = () => {
-    $('#ly-form').innerHTML = `
-      ${T() === 'brown' ? `<div class="lay-group"><b>การวางซองในเครื่องพิมพ์</b>
-        <div class="seg">${[['landscape', 'แนวนอน', '10" × 8.2"'], ['portrait', 'แนวตั้ง', '8.2" × 10"']].map(([v, l, d]) => `<label><input type="radio" name="ly-orient" value="${v}" ${L().orientation === v ? 'checked' : ''}><span>${l}<small>${d}</small></span></label>`).join('')}</div></div>` : ''}
-      <div class="lay-group"><b>⇲ เลื่อนทั้งหมด (ปรับให้ตรงเครื่องพิมพ์)</b><div class="lay-grid">${field('offset', 'x', 'แนวนอน X')}${field('offset', 'y', 'แนวตั้ง Y')}</div></div>
-      <div class="lay-group"><b>ผู้ส่ง / เลขที่หนังสือ (มุมซ้ายบน)</b><div class="lay-grid">${field('sender', 'x', 'X')}${field('sender', 'y', 'Y')}${field('sender', 'size', 'ขนาดอักษร')}${field('emblem', 'h', 'ความสูงตรา')}</div></div>
-      <div class="lay-group"><b>ช่องค่าฝากส่ง <label style="display:inline-flex;gap:4px;align-items:center;margin-left:auto;font-weight:400;color:var(--text)"><input type="checkbox" id="ly-postage-show" ${L().postage.show !== false ? 'checked' : ''}> แสดง</label></b>
-        <div class="lay-grid">${field('postage', 'x', 'X')}${field('postage', 'y', 'Y')}${field('postage', 'w', 'กว้าง')}${field('postage', 'size', 'ขนาดอักษร')}</div></div>
-      <div class="lay-group"><b>ผู้รับ (เรียน / ที่อยู่ / รหัสไปรษณีย์)</b><div class="lay-grid">${field('recipient', 'x', 'X')}${field('recipient', 'y', 'Y')}${field('recipient', 'w', 'กว้าง')}${field('recipient', 'size', 'ขนาดอักษร')}</div></div>
-      <label>หมายเหตุเมื่อบันทึก (เช่น เครื่องพิมพ์ที่ใช้)<input id="ly-note" placeholder="เช่น HP LaserJet ห้องสารบรรณ" value="${esc(Y.note || '')}"></label>`;
-  };
-  $('#ly-form').addEventListener('input', (e) => {
-    const t = e.target;
-    if (t.id === 'ly-note') { Y.note = t.value; return; }
-    if (t.dataset.g) {
-      const v = Number(t.value);
-      if (Number.isFinite(v)) { L()[t.dataset.g][t.dataset.k] = v; Y.dirty[T()] = true; paintPreview(); paintStatus(); }
-    }
-    if (t.id === 'ly-postage-show') { L().postage.show = t.checked; Y.dirty[T()] = true; paintPreview(); paintStatus(); }
+  $('#ly-stage').addEventListener('keydown', (e) => {
+    if (!Y.sel || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    e.preventDefault();
+    const st = e.shiftKey ? 5 : 0.5;
+    const it = L().items[Y.sel];
+    if (e.key === 'ArrowLeft') it.x = r05(Math.max(0, it.x - st));
+    if (e.key === 'ArrowRight') it.x = r05(it.x + st);
+    if (e.key === 'ArrowUp') it.y = r05(Math.max(0, it.y - st));
+    if (e.key === 'ArrowDown') it.y = r05(it.y + st);
+    const el = $(`#ly-stage [data-block="${Y.sel}"]`); if (el) { el.style.left = `${it.x}mm`; el.style.top = `${it.y}mm`; }
+    syncRow(Y.sel); touch();
   });
-  $('#ly-form').addEventListener('change', async (e) => {
+
+  // ---------- global settings (offset / orientation) ----------
+  const paintGlobal = () => {
+    $('#ly-global').innerHTML = `<div class="lay-group" style="margin:0"><b>⇲ เลื่อนทั้งหมด (ปรับให้ตรงเครื่องพิมพ์)</b>
+      <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+        <label>แนวนอน X (มม.)<input type="number" step="0.5" id="ly-off-x" value="${L().offset.x}" style="width:110px"></label>
+        <label>แนวตั้ง Y (มม.)<input type="number" step="0.5" id="ly-off-y" value="${L().offset.y}" style="width:110px"></label>
+        ${T() === 'brown' ? `<div><span class="muted" style="font-size:17px">การวางซองน้ำตาล</span><div class="seg">${[['landscape', 'แนวนอน', '10" × 8.2"'], ['portrait', 'แนวตั้ง', '8.2" × 10"']].map(([v, l, d]) => `<label><input type="radio" name="ly-orient" value="${v}" ${L().orientation === v ? 'checked' : ''}><span>${l}<small>${d}</small></span></label>`).join('')}</div></div>` : ''}
+      </div></div>`;
+  };
+  $('#ly-global').addEventListener('input', (e) => {
+    if (e.target.id === 'ly-off-x' || e.target.id === 'ly-off-y') {
+      const v = Number(e.target.value); if (!Number.isFinite(v)) return;
+      L().offset[e.target.id === 'ly-off-x' ? 'x' : 'y'] = v; touch(); paintPreview();
+    }
+  });
+  $('#ly-global').addEventListener('change', async (e) => {
     if (e.target.name !== 'ly-orient' || e.target.value === L().orientation) return;
-    const go = await ask('เปลี่ยนการวางซองน้ำตาล?', 'ตำแหน่งข้อความจะถูกตั้งเป็นค่าเริ่มต้นของแนวใหม่ (ยังไม่บันทึกจนกว่าจะกด "บันทึกการตั้งค่า")');
-    if (go) { Y.draft.brown = defaultLayout('brown', e.target.value); Y.dirty.brown = true; }
+    const go = await ask('เปลี่ยนการวางซองน้ำตาล?', 'ตำแหน่งทุกรายการจะถูกตั้งเป็นค่าเริ่มต้นของแนวใหม่ (ยังไม่บันทึกจนกว่าจะกด "บันทึกการตั้งค่า")');
+    if (go) { Y.draft.brown = defaultLayout('brown', e.target.value, S.settings); Y.dirty.brown = true; }
     paintAll();
   });
+
+  // ---------- item list ----------
+  const num_ = (key, p, v, extra = '') => `<input type="number" step="0.5" data-p="${p}" value="${v ?? ''}" ${extra}>`;
+  const paintItems = () => {
+    let lastGroup = '';
+    const rows = keysOf().map((key) => {
+      const it = L().items[key]; if (!it) return '';
+      const d = itemDef(key);
+      const grp = d.group !== lastGroup ? `<tr class="grp"><td colspan="8">${esc(d.group)}</td></tr>` : '';
+      lastGroup = d.group;
+      const isCustom = key.startsWith('custom_');
+      const hasW = ['text', 'box', 'custom'].includes(d.kind);
+      const opt2 = d.kind === 'postcode' ? `<label title="แสดงเป็นช่องสี่เหลี่ยม" style="display:flex;flex-direction:column;align-items:center;margin:0;color:var(--text);font-size:14px;line-height:1"><input type="checkbox" data-p="boxes" ${it.boxes !== false ? 'checked' : ''}>กล่อง</label>`
+        : (d.kind === 'text' || isCustom) ? `<input type="checkbox" data-p="wrap" title="ข้อความยาวให้ขึ้นบรรทัดใหม่ (ไม่ย่อขนาด)" ${it.wrap ? 'checked' : ''}>` : '';
+      return `${grp}<tr data-key="${key}" class="${it.show === false ? 'off' : ''}${Y.sel === key ? ' sel' : ''}">
+        <td><input type="checkbox" data-p="show" title="แสดง / ซ่อน" ${it.show !== false ? 'checked' : ''}></td>
+        <td class="nm">${isCustom ? `<div style="display:flex;gap:3px;align-items:center"><input type="text" data-p="text" value="${esc(it.text || '')}" placeholder="พิมพ์ข้อความ" style="width:100%;min-width:80px"><button class="btn btn-sm btn-icon btn-danger" data-del title="ลบรายการนี้">🗑</button></div>` : esc(d.label)}</td>
+        <td>${num_(key, 'x', it.x)}</td><td>${num_(key, 'y', it.y)}</td>
+        <td>${hasW ? num_(key, 'w', it.w) : ''}</td>
+        <td>${d.kind === 'image' ? num_(key, 'h', it.h, 'title="ความสูง มม."') : num_(key, 'size', it.size, 'title="ขนาดอักษร pt"')}</td>
+        <td style="text-align:center">${d.kind === 'image' ? '' : `<input type="checkbox" data-p="bold" title="ตัวหนา" ${it.bold ? 'checked' : ''}>`}</td>
+        <td style="text-align:center">${opt2}</td></tr>`;
+    }).join('');
+    $('#ly-items').innerHTML = `<table class="lay-items"><thead><tr><th title="แสดง">แสดง</th><th>รายการ</th><th>X มม.</th><th>Y มม.</th><th>กว้าง</th><th>ขนาด</th><th>หนา</th><th title="ข้อความยาวให้ขึ้นบรรทัดใหม่ / รหัสไปรษณีย์แบบกล่อง">ตัด<br>บรรทัด</th></tr></thead><tbody>${rows}</tbody></table>`;
+  };
+  $('#ly-items').addEventListener('input', (e) => {
+    const tr = e.target.closest('tr[data-key]'); if (!tr) return;
+    const it = L().items[tr.dataset.key]; const p = e.target.dataset.p; if (!p) return;
+    if (e.target.type === 'checkbox') {
+      it[p] = e.target.checked;
+      if (p === 'show') tr.classList.toggle('off', !e.target.checked);
+    } else if (p === 'text') it.text = e.target.value;
+    else { const v = Number(e.target.value); if (!Number.isFinite(v)) return; it[p] = v; }
+    touch(); paintPreview();
+  });
+  $('#ly-items').addEventListener('click', async (e) => {
+    const tr = e.target.closest('tr[data-key]'); if (!tr) return;
+    const key = tr.dataset.key;
+    if (e.target.closest('[data-del]')) {
+      if (!(await ask('ลบข้อความนี้?', esc(L().items[key].text || ''), { icon: 'warning', confirmButtonColor: '#c0392b', confirmButtonText: 'ลบ' }))) return;
+      delete L().items[key]; if (Y.sel === key) Y.sel = null; touch(); paintItems(); paintPreview(); return;
+    }
+    if (!e.target.closest('input,button,label')) select(key);
+  });
+  $('#ly-add').addEventListener('click', () => {
+    const { w, h } = size();
+    const key = `custom_${Date.now().toString(36)}`;
+    L().items[key] = { show: true, x: r05(w * 0.06), y: r05(h * 0.7), w: r05(w * 0.4), size: T() === 'brown' ? 18 : 15, bold: false, wrap: false, text: 'ข้อความ' };
+    Y.sel = key; touch(); paintItems(); paintPreview();
+    setTimeout(() => { const inp = $(`#ly-items tr[data-key="${key}"] input[data-p="text"]`); inp?.focus(); inp?.select(); }, 30);
+  });
+  $('#ly-note').addEventListener('input', (e) => { Y.note = e.target.value; });
 
   // ---------- save / load ----------
   const save = async (layout, note, source = null) => {
@@ -1703,24 +1879,27 @@ async function viewLayout() {
   });
   $('#ly-revert').addEventListener('click', () => { Y.draft[T()] = clone(myLayout(T())); Y.dirty[T()] = false; Y.source[T()] = null; paintAll(); });
   $('#ly-reset').addEventListener('click', async () => {
-    if (!(await ask('คืนค่าเริ่มต้น?', 'ตำแหน่งทั้งหมดจะกลับเป็นค่าเริ่มต้นของระบบ (ยังไม่บันทึกจนกว่าจะกด "บันทึกการตั้งค่า")'))) return;
-    Y.draft[T()] = defaultLayout(T(), L().orientation); Y.dirty[T()] = true; paintAll();
+    if (!(await ask('คืนค่าเริ่มต้น?', 'ทุกรายการจะกลับเป็นค่าเริ่มต้นของระบบ ข้อความที่เพิ่มเองจะถูกลบ (ยังไม่บันทึกจนกว่าจะกด "บันทึกการตั้งค่า")'))) return;
+    Y.draft[T()] = defaultLayout(T(), L().orientation, S.settings); Y.dirty[T()] = true; Y.sel = null; paintAll();
   });
   $('#ly-test').addEventListener('click', () => printLetters([SAMPLE_LETTER], T(), S.settings, { markPrinted: false, layout: L() }));
 
-  const previewOf = (layout, title) => Swal.fire({ title, width: 'min(900px, 96vw)', html: previewHtml([SAMPLE_LETTER], T(), S.settings, 1, 820, resolveLayout(T(), S.settings, layout)), confirmButtonText: 'ปิด' });
+  const previewOf = (layout, title) => Swal.fire({
+    title, width: 'min(900px, 96vw)', confirmButtonText: 'ปิด',
+    html: previewHtml([SAMPLE_LETTER], T(), S.settings, 1, 820, resolveLayout(T(), S.settings, layout)),
+    didOpen: (p) => fitLater(p),
+  });
 
   const loadLists = async () => {
     const [others, mine] = await Promise.all([
       must(S.sb.from('envelope_layouts').select('*').eq('envelope', T()).neq('user_id', S.profile.id).order('created_at', { ascending: false }).limit(300)),
       must(S.sb.from('envelope_layouts').select('*').eq('envelope', T()).eq('user_id', S.profile.id).order('created_at', { ascending: false }).limit(50)),
     ]);
-    // latest version of each other user
     const latest = []; const seen = new Map();
     for (const r of others) { if (!seen.has(r.user_id)) { seen.set(r.user_id, 1); latest.push(r); } else seen.set(r.user_id, seen.get(r.user_id) + 1); }
     $('#ly-others').innerHTML = latest.length ? `<div class="table-wrap"><table><thead><tr><th>ผู้ใช้</th><th>บันทึกล่าสุด</th><th>หมายเหตุ</th><th></th></tr></thead><tbody>
       ${latest.map((r) => `<tr data-id="${r.id}"><td><b>${esc(r.user_name || '')}</b>${seen.get(r.user_id) > 1 ? `<div class="muted" style="font-size:17px">${seen.get(r.user_id)} เวอร์ชัน</div>` : ''}</td>
-        <td style="white-space:nowrap">${fmtDT(r.created_at)}</td><td>${esc(r.note || '')}${r.layout.orientation === 'portrait' ? ' <span class="badge b-brown">แนวตั้ง</span>' : ''}</td>
+        <td style="white-space:nowrap">${fmtDT(r.created_at)}</td><td>${esc(r.note || '')}${r.layout?.orientation === 'portrait' ? ' <span class="badge b-brown">แนวตั้ง</span>' : ''}</td>
         <td class="actions"><button class="btn btn-sm" data-act="view">ดู</button><button class="btn btn-sm btn-primary" data-act="use">ใช้การตั้งค่านี้</button></td></tr>`).join('')}</tbody></table></div>`
       : `<div class="empty">ยังไม่มีผู้ใช้อื่นบันทึกการตั้งค่า${ENVELOPES[T()].label}</div>`;
     $('#ly-others')._rows = latest;
@@ -1758,8 +1937,12 @@ async function viewLayout() {
     } catch (er) { fail(er); }
   });
 
-  $('#ly-tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-t]'); if (!b) return; Y.type = b.dataset.t; paintAll(); });
-  const paintAll = () => { paintStatus(); paintForm(); paintPreview(); loadLists().catch((er) => { $('#ly-others').innerHTML = `<div class="empty">${esc(thaiError(er))}</div>`; }); };
+  $('#ly-tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-t]'); if (!b) return; Y.type = b.dataset.t; Y.sel = null; paintAll(); });
+  const paintAll = () => {
+    paintStatus(); paintGlobal(); paintItems(); paintPreview();
+    $('#ly-note').value = Y.note || '';
+    loadLists().catch((er) => { $('#ly-others').innerHTML = `<div class="empty">${esc(thaiError(er))}</div>`; });
+  };
   paintAll();
 }
 
