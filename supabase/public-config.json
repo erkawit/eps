@@ -1,0 +1,5 @@
+{
+  "_comment": "ค่าสาธารณะของโปรเจกต์ Supabase (ใช้เมื่อยังไม่ได้ตั้ง Environment Variables ใน Vercel) — ห้ามใส่ service_role / secret key ในไฟล์นี้",
+  "SUPABASE_URL": "https://dwfeqlaggpghwgzstjvq.supabase.co",
+  "SUPABASE_ANON_KEY": "sb_publishable_ofSPnKMRERBLFqcUD4ACgQ_y0saDOBu"
+}

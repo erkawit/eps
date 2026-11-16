@@ -1,0 +1,7 @@
+# ไม่ส่งไฟล์ของโหมด XAMPP/MySQL ขึ้น Vercel
+api/*.php
+api/.htaccess
+private
+database
+.htaccess
+dist

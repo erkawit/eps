@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
-  "outputDirectory": "public",
+  "outputDirectory": "dist",
   "cleanUrls": true,
   "headers": [
     {
@@ -39,6 +39,9 @@
   "functions": {
     "api/backup.js": {
       "maxDuration": 60
+    },
+    "api/admin-users.js": {
+      "maxDuration": 30
     }
   },
   "crons": [

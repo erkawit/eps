@@ -1,11 +1,11 @@
 {
   "name": "envelope-print-system",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "ระบบพิมพ์ซองจดหมาย — ออกเลขหนังสือและพิมพ์ซอง (Supabase + Vercel)",
+  "description": "ระบบพิมพ์ซองจดหมาย + ระบบพิมพ์เช็ค — MySQL (XAMPP) หรือ Supabase (Vercel)",
   "scripts": {
     "build": "node scripts/build-config.js",
-    "dev": "npx --yes serve public -l 3000"
+    "dev": "npm run build && npx --yes serve dist -l 3000"
   },
   "engines": { "node": ">=18" }
 }

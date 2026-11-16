@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ระบบพิมพ์ซองจดหมาย + ระบบพิมพ์เช็ค</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="preload" href="fonts/THSarabunPSK-Regular.woff" as="font" type="font/woff" crossorigin>
+  <link rel="preload" href="fonts/THSarabunPSK-Bold.woff" as="font" type="font/woff" crossorigin>
+  <link rel="stylesheet" href="assets/style.css">
+  <style id="print-page-style">@page { size: 234.95mm 107.95mm; margin: 0; }</style>
+</head>
+<body>
+  <!-- ============ Boot / config error ============ -->
+  <div id="boot" class="boot"><div class="spinner"></div></div>
+
+  <!-- ============ Database connection (first run / connection lost) ============ -->
+  <main id="setup-screen" class="login hidden">
+    <div class="login-card setup-card">
+      <img src="assets/logo.png" alt="" class="login-logo">
+      <h2 style="margin:4px 0 2px">ตั้งค่าการเชื่อมต่อฐานข้อมูล</h2>
+      <p class="muted" id="setup-reason" style="margin:0 0 10px"></p>
+      <form id="setup-form" autocomplete="off">
+        <div class="setup-grid">
+          <label>Host (เซิร์ฟเวอร์ MySQL)<input name="host" value="localhost" required></label>
+          <label>Port<input name="port" type="number" value="3306" required></label>
+          <label>ชื่อผู้ใช้ MySQL<input name="username" value="root" required autocomplete="off"></label>
+          <label>รหัสผ่าน MySQL<input name="password" type="password" placeholder="(XAMPP ค่าเริ่มต้นไม่มีรหัสผ่าน)" autocomplete="new-password"></label>
+          <label class="full">ชื่อฐานข้อมูล<input name="database" value="envelope_print" required pattern="[A-Za-z0-9_]+"></label>
+          <label class="full check"><input type="checkbox" name="seed" checked> นำเข้าข้อมูลเริ่มต้น (รหัสไปรษณีย์ ผู้รับ/หน่วยงาน และข้อมูลเช็คเดิม) เมื่อฐานข้อมูลยังว่าง</label>
+        </div>
+        <div id="setup-result" class="setup-result"></div>
+        <div class="setup-actions">
+          <button type="button" class="btn" id="setup-test">🔌 ทดสอบการเชื่อมต่อ</button>
+          <button type="submit" class="btn btn-primary">💾 บันทึกและติดตั้ง</button>
+        </div>
+      </form>
+      <p class="muted setup-hint">XAMPP: เปิด <b>Apache</b> และ <b>MySQL</b> ใน XAMPP Control Panel ก่อน · ค่าเริ่มต้น Host <b>localhost</b> Port <b>3306</b> ผู้ใช้ <b>root</b> ไม่มีรหัสผ่าน · ระบบจะสร้างฐานข้อมูลและตารางให้อัตโนมัติ</p>
+    </div>
+  </main>
+
+  <!-- ============ Login ============ -->
+  <main id="login-screen" class="login hidden">
+    <div class="login-card">
+      <img src="assets/logo.png" alt="ระบบพิมพ์ซองจดหมาย" class="login-logo">
+      <form id="login-form" autocomplete="on">
+        <label>อีเมล<input type="email" name="email" required autocomplete="username" placeholder="name@example.com"></label>
+        <label>รหัสผ่าน<input type="password" name="password" required autocomplete="current-password" placeholder="••••••••"></label>
+        <button class="btn btn-primary btn-block" type="submit">เข้าสู่ระบบ</button>
+      </form>
+      <p class="login-foot">ยังไม่มีบัญชี? <a href="#" id="link-register">ขอสิทธิ์ใช้งาน</a></p>
+      <p class="login-foot hidden" style="margin-top:6px" id="link-conn-wrap"><a href="#" id="link-conn">⚙️ ตั้งค่าการเชื่อมต่อฐานข้อมูล</a></p>
+    </div>
+  </main>
+
+  <!-- ============ Waiting for approval ============ -->
+  <main id="pending-screen" class="login hidden">
+    <div class="login-card">
+      <img src="assets/logo.png" alt="" class="login-logo">
+      <h2 id="pending-title">รอผู้ดูแลระบบอนุมัติ</h2>
+      <p class="muted">บัญชี <b id="pending-email"></b> ยังไม่ได้รับสิทธิ์ใช้งาน<br>กรุณาติดต่อผู้ดูแลระบบเพื่อเปิดใช้งาน</p>
+      <button class="btn btn-ghost btn-block" data-action="logout">ออกจากระบบ</button>
+    </div>
+  </main>
+
+  <!-- ============ App ============ -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span id="brand-icon"><img src="assets/logo.png" alt=""></span>
+        <div><b id="brand-title">ระบบพิมพ์ซองจดหมาย</b><small id="brand-org"></small></div>
+      </div>
+      <button class="btn btn-gold btn-sm sys-switch hidden" data-action="switch-system">⇄ สลับระบบ</button>
+      <nav id="nav"></nav>
+      <div class="me">
+        <div class="me-name" id="me-name" title="คลิกเพื่อเปลี่ยนรหัสผ่าน"></div>
+        <div class="me-role" id="me-role"></div>
+        <button class="btn btn-ghost btn-sm" data-action="logout">ออกจากระบบ</button>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menu-btn" aria-label="เมนู">☰</button>
+        <h1 id="page-title"></h1>
+        <div class="topbar-right" id="topbar-right"></div>
+        <button class="btn btn-sm hidden" data-action="switch-system" title="สลับไปใช้อีกระบบ">⇄ สลับระบบ</button>
+      </header>
+      <section id="view" class="view"></section>
+    </div>
+  </div>
+
+  <!-- envelopes are rendered here only while printing -->
+  <div id="print-root"></div>
+
+  <!-- SweetAlert2: ใช้ไฟล์ในเครื่องก่อน (assets/vendor) ถ้าไม่มีจะโหลดจากอินเทอร์เน็ต -->
+  <script src="assets/vendor/sweetalert2.all.min.js"></script>
+  <script>window.Swal || document.write('<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.14.5/dist/sweetalert2.all.min.js"><\/script>');</script>
+  <!-- โหมดฐานข้อมูล: ไฟล์นี้ว่าง = MySQL (XAMPP) · บน Vercel ระบบสร้างให้อัตโนมัติ = Supabase -->
+  <script src="config.js"></script>
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>

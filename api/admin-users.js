@@ -2,7 +2,8 @@
 //  /api/admin-users — admin creates a user that can sign in immediately
 //  (e-mail already confirmed, no confirmation e-mail is sent).
 //
-//  POST  { email, password, full_name, role }   Authorization: Bearer <admin access token>
+//  POST  { email, password, full_name, role, perm_envelope, perm_cheque }   Authorization: Bearer <admin access token>
+//  POST  { action: 'set_password', id, password }  → admin sets a new password for a user
 //  GET   ?status=1  → { configured }
 //
 //  Needs Vercel env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (server only).
@@ -42,12 +43,26 @@ module.exports = async function handler(req, res) {
     const [p] = pr.ok ? await pr.json() : [];
     if (!p || p.role !== 'admin' || !p.active) return send(res, 403, { ok: false, error: 'เฉพาะผู้ดูแลระบบ' });
 
-    // ---- validate input ----
     const b = await readBody(req);
+
+    // ---- set a new password for a user (admin "ตั้งรหัสผ่านใหม่") ----
+    if (b.action === 'set_password') {
+      const id = String(b.id || ''); const pw = String(b.password || '');
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return send(res, 400, { ok: false, error: 'ไม่พบผู้ใช้' });
+      if (pw.length < 6) return send(res, 400, { ok: false, error: 'รหัสผ่านอย่างน้อย 6 ตัวอักษร' });
+      const r = await fetch(`${base}/auth/v1/admin/users/${id}`, { method: 'PUT', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw, email_confirm: true }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); return send(res, r.status === 404 ? 404 : 400, { ok: false, error: j.msg || j.message || `HTTP ${r.status}` }); }
+      return send(res, 200, { ok: true });
+    }
+
+    // ---- validate input ----
     const email = String(b.email || '').trim().toLowerCase();
     const password = String(b.password || '');
     const full_name = String(b.full_name || '').trim();
     const role = b.role === 'admin' ? 'admin' : 'staff';
+    const perm_envelope = role === 'admin' ? true : b.perm_envelope !== false;
+    const perm_cheque = role === 'admin' ? true : Boolean(b.perm_cheque);
+    if (!perm_envelope && !perm_cheque) return send(res, 400, { ok: false, error: 'กรุณาเลือกสิทธิ์อย่างน้อย 1 ระบบ' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(res, 400, { ok: false, error: 'อีเมลไม่ถูกต้อง' });
     if (password.length < 6) return send(res, 400, { ok: false, error: 'รหัสผ่านอย่างน้อย 6 ตัวอักษร' });
     if (!full_name) return send(res, 400, { ok: false, error: 'กรุณากรอกชื่อ' });
@@ -69,7 +84,7 @@ module.exports = async function handler(req, res) {
     const up = await fetch(`${base}/rest/v1/profiles?id=eq.${created.id}`, {
       method: 'PATCH',
       headers: { ...H, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ active: true, role, full_name }),
+      body: JSON.stringify({ active: true, role, full_name, perm_envelope, perm_cheque }),
     });
     if (!up.ok) throw new Error(`update profile → HTTP ${up.status}: ${(await up.text()).slice(0, 200)}`);
     return send(res, 200, { ok: true, id: created.id, email });

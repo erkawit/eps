@@ -4,7 +4,8 @@
 //  • Vercel Cron calls this every day at 00:00 Asia/Bangkok (17:00 UTC).
 //    If nobody pressed "สำรองข้อมูลตอนนี้" yesterday, a full backup is
 //    written to Supabase Storage:  backups/<ปี พ.ศ.>/<เดือน>/<วันที่>/...
-//  • An admin can also trigger it from the web page (?force=1 + user token).
+//  • An admin can also trigger it from the web page (?force=1 + user token);
+//    ?type=manual = the "สำรองข้อมูลตอนนี้" button (logged as a manual backup).
 //  • GET /api/backup?status=1 only reports whether it is configured.
 //
 //  Environment variables (Vercel → Settings → Environment Variables):
@@ -15,7 +16,7 @@
 // =====================================================================
 const zlib = require('zlib');
 
-const TABLES = ['settings', 'titles', 'provinces', 'postcodes', 'customers', 'books', 'letters', 'print_logs', 'profiles', 'envelope_layouts', 'backup_logs'];
+const TABLES = ['settings', 'titles', 'provinces', 'postcodes', 'customers', 'books', 'letters', 'print_logs', 'profiles', 'envelope_layouts', 'cheque_banks', 'cheque_accounts', 'cheques', 'cheque_forms', 'cheque_print_logs', 'backup_logs'];
 const BUCKET = 'backups';
 
 function send(res, code, body) {
@@ -65,7 +66,7 @@ module.exports = async function handler(req, res) {
       const user = await u.json();
       const [p] = await (await api(`/rest/v1/profiles?id=eq.${user.id}&select=role,active,full_name,email`)).json();
       if (!p || p.role !== 'admin' || !p.active) return send(res, 403, { ok: false, error: 'เฉพาะผู้ดูแลระบบ' });
-      by = `${p.full_name || p.email} (สั่งจากหน้าเว็บ)`; byId = user.id;
+      by = q.get('type') === 'manual' ? `${p.full_name || p.email}` : `${p.full_name || p.email} (สั่งจากหน้าเว็บ)`; byId = user.id;
     }
 
     // ---------- skip if a manual backup was made yesterday ----------
@@ -74,6 +75,7 @@ module.exports = async function handler(req, res) {
     const yb = bkk(new Date(now.getTime() - 864e5));
     const yesterday = yb.ce;
     const force = !isCron && q.get('force') === '1';
+    const type = !isCron && q.get('type') === 'manual' ? 'manual' : 'auto';
     if (!force) {
       const enc = encodeURIComponent;
       const manual = await (await api(`/rest/v1/backup_logs?select=id&backup_type=eq.manual&created_at=gte.${enc(`${yesterday}T00:00:00+07:00`)}&created_at=lt.${enc(`${today}T00:00:00+07:00`)}&limit=1`)).json();
@@ -95,9 +97,9 @@ module.exports = async function handler(req, res) {
     }
 
     const b = bkk(now);
-    const path = `${b.be}/${b.mm}/${b.dd}/backup_${b.be}-${b.mm}-${b.dd}_${b.hh}${b.mi}${b.ss}_auto.json.gz`;
+    const path = `${b.be}/${b.mm}/${b.dd}/backup_${b.be}-${b.mm}-${b.dd}_${b.hh}${b.mi}${b.ss}_${type}.json.gz`;
     const body = zlib.gzipSync(Buffer.from(JSON.stringify({
-      meta: { app: 'envelope-print-system', format: 1, type: 'auto', path, created_at: now.toISOString(), created_by: by, supabase_url: base, row_counts },
+      meta: { app: 'envelope-print-system', format: 1, type, path, created_at: now.toISOString(), created_by: by, supabase_url: base, row_counts },
       tables,
     })));
 
@@ -106,7 +108,7 @@ module.exports = async function handler(req, res) {
     });
     await api('/rest/v1/backup_logs', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ backup_type: 'auto', path, size_bytes: body.length, row_counts, created_by: byId, created_by_name: by }),
+      body: JSON.stringify({ backup_type: type, path, size_bytes: body.length, row_counts, created_by: byId, created_by_name: by }),
     });
     return send(res, 200, { ok: true, path, size_bytes: body.length, row_counts });
   } catch (e) {

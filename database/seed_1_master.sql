@@ -1,20 +1,19 @@
--- 02: settings (tblSetup), titles (tblTitle), provinces (tblProvince), first registry book
-insert into public.settings (id, org_name, address, amphur, province, postcode, telephone, fax, customer_prefix, customer_year, customer_length)
-values (1, 'ศาลจังหวัดอุดรธานี', 'ถนนอธิบดี ตำบลหมากแข้ง', 'เมือง', 'อุดรธานี', '41000', '0 4222 1993-6', '0 4224 3839', 'CUS', true, 6)
-on conflict (id) do update set org_name=excluded.org_name, address=excluded.address, amphur=excluded.amphur, province=excluded.province,
-  postcode=excluded.postcode, telephone=excluded.telephone, fax=excluded.fax, customer_prefix=excluded.customer_prefix, customer_year=excluded.customer_year;
+-- ค่าหน่วยงาน, คำนำหน้า, จังหวัด, เล่มทะเบียนแรก
+SET NAMES utf8mb4;
 
-insert into public.titles (id, name) values
+INSERT IGNORE INTO settings (id, org_name, address, amphur, province, postcode, telephone, fax, customer_prefix, customer_year, customer_length, postage_text, show_postage, show_emblem, recipient_prefix, brown_orientation)
+VALUES (1, 'ศาลจังหวัดอุดรธานี', 'ถนนอธิบดี ตำบลหมากแข้ง', 'เมือง', 'อุดรธานี', '41000', '0 4222 1993-6', '0 4224 3839', 'CUS', 1, 6, 'ชำระค่าฝากส่งเป็นรายเดือน\nใบอนุญาตที่ ......../........\nไปรษณีย์อุดรธานี', 1, 1, 'เรียน', 'landscape');
+
+INSERT IGNORE INTO titles (id, name) VALUES
 (0, '-'),
 (1, 'นาย'),
 (2, 'นาง'),
 (3, 'นางสาว'),
 (4, 'ดร.'),
 (5, 'ศาสตราจารย์'),
-(6, 'เด็กหญิง')
-on conflict do nothing;
+(6, 'เด็กหญิง');
 
-insert into public.provinces (id, name) values
+INSERT IGNORE INTO provinces (id, name) VALUES
 (0, '-'),
 (1, 'กระบี่'),
 (2, 'กรุงเทพมหานคร'),
@@ -92,8 +91,6 @@ insert into public.provinces (id, name) values
 (74, 'อุตรดิตถ์'),
 (75, 'อุทัยธานี'),
 (76, 'อุบลราชธานี'),
-(77, 'บึงกาฬ')
-on conflict do nothing;
+(77, 'บึงกาฬ');
 
-insert into public.books (name, prefix, year, next_no) select 'ทะเบียนหนังสือส่งภายนอก', 'ศย 304.019', public.be_year(), 1
-where not exists (select 1 from public.books);
+INSERT INTO books (name, prefix, year, next_no) SELECT 'ทะเบียนหนังสือส่งภายนอก', 'ศย 304.019', YEAR(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 7 HOUR)) + 543, 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM books);

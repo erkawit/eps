@@ -1,0 +1,7 @@
+Options -Indexes
+DirectoryIndex index.html
+
+# ไฟล์สำหรับนักพัฒนา ไม่ต้องเปิดผ่านเว็บ
+<FilesMatch "^(README\.md|\.gitignore)$">
+  Require all denied
+</FilesMatch>

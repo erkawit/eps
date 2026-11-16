@@ -1,24 +1,36 @@
 /* ฟอนต์ TH SarabunPSK (SIL Open Font License) — ใช้ฟอนต์นี้ทั้งระบบ */
 @font-face {
   font-family: 'TH SarabunPSK';
-  src: url('/fonts/THSarabunPSK-Regular.woff') format('woff');
+  src: url('../fonts/THSarabunPSK-Regular.woff') format('woff');
   font-weight: 400; font-style: normal; font-display: block;
 }
 @font-face {
   font-family: 'TH SarabunPSK';
-  src: url('/fonts/THSarabunPSK-Bold.woff') format('woff');
+  src: url('../fonts/THSarabunPSK-Bold.woff') format('woff');
   font-weight: 700; font-style: normal; font-display: block;
 }
 @font-face {
   font-family: 'TH SarabunPSK';
-  src: url('/fonts/THSarabunPSK-Italic.woff') format('woff');
+  src: url('../fonts/THSarabunPSK-Italic.woff') format('woff');
   font-weight: 400; font-style: italic; font-display: block;
 }
 @font-face {
   font-family: 'TH SarabunPSK';
-  src: url('/fonts/THSarabunPSK-BoldItalic.woff') format('woff');
+  src: url('../fonts/THSarabunPSK-BoldItalic.woff') format('woff');
   font-weight: 700; font-style: italic; font-display: block;
 }
+
+/* ---------- แบบอักษรเพิ่มเติมสำหรับแบบฟอร์มเช็ค (เลือกได้ทีละรายการ) ---------- */
+@font-face { font-family: 'TH Sarabun'; src: url('../fonts/THSarabun-Regular.woff') format('woff'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'TH Sarabun'; src: url('../fonts/THSarabun-Bold.woff') format('woff'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'TH Sarabun'; src: url('../fonts/THSarabun-Italic.woff') format('woff'); font-weight: 400; font-style: italic; font-display: block; }
+@font-face { font-family: 'TH Sarabun'; src: url('../fonts/THSarabun-BoldItalic.woff') format('woff'); font-weight: 700; font-style: italic; font-display: block; }
+@font-face { font-family: 'TH SarabunIT๙'; src: url('../fonts/THSarabunIT9-Regular.woff') format('woff'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: 'TH SarabunIT๙'; src: url('../fonts/THSarabunIT9-Bold.woff') format('woff'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: 'TH SarabunIT๙'; src: url('../fonts/THSarabunIT9-Italic.woff') format('woff'); font-weight: 400; font-style: italic; font-display: block; }
+@font-face { font-family: 'TH SarabunIT๙'; src: url('../fonts/THSarabunIT9-BoldItalic.woff') format('woff'); font-weight: 700; font-style: italic; font-display: block; }
+@font-face { font-family: 'IDAutomation Code39'; src: url('../fonts/IDAutomationCode39.woff') format('woff'); font-display: block; }
+@font-face { font-family: 'Code 128'; src: url('../fonts/Code128.woff') format('woff'); font-display: block; }
 :root {
   --navy: #13285e;
   --navy-2: #1d3a82;
@@ -119,7 +131,8 @@ nav { flex: 1; padding: 12px 10px; overflow: auto; }
 .nav-link.active { background: var(--navy); color: #fff; }
 .nav-link .ico { width: 20px; text-align: center; }
 .me { padding: 14px 16px; border-top: 1px solid var(--line); }
-.me-name { font-weight: 600; }
+.me-name { font-weight: 600; cursor: pointer; }
+.me-name:hover { text-decoration: underline; }
 .me-role { font-size: 18px; color: var(--muted); margin-bottom: 8px; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar {
@@ -374,3 +387,90 @@ details.tree > details.tree, details.tree > .table-wrap { margin-left: 22px; }
   repeating-linear-gradient(90deg, #6d7487 0 1px, transparent 1px 1mm) bottom / 100% 1.8mm no-repeat; margin-bottom: 2px; }
 .rsp-foot { background: #fff; border-top: 1px solid var(--line); padding: 8px 16px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap; font-size: 18px; }
 .rsp-foot .tips { flex: 1; color: var(--muted); min-width: 280px; }
+
+/* ---------- system chooser (full-screen SweetAlert) ---------- */
+.swal2-popup.sys-popup { background: radial-gradient(ellipse at top, #ffffff 0%, #eef1f8 55%, #dfe5f2 100%) !important; }
+.sys-choose { min-height: calc(100vh - 80px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 4px; padding: 10px; }
+.sys-logo { width: 150px; max-width: 40vw; }
+.sys-choose h2 { font-size: 36px; color: var(--navy); margin: 6px 0 0; }
+.sys-choose > p { font-size: 24px; color: var(--muted); margin: 0 0 18px; }
+.sys-cards { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
+.sys-card { font: inherit; width: 340px; max-width: 86vw; background: #fff; border: 3px solid var(--line); border-radius: 22px; padding: 26px 22px 22px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; box-shadow: 0 8px 30px rgba(19, 40, 94, .12); transition: transform .15s, border-color .15s, box-shadow .15s; color: var(--text); }
+.sys-card:hover, .sys-card:focus-visible { transform: translateY(-4px); border-color: var(--gold); box-shadow: 0 14px 36px rgba(19, 40, 94, .2); outline: none; }
+.sys-card.current { border-color: var(--navy); }
+.sys-icon { width: 130px; height: 130px; color: var(--navy); display: block; margin-bottom: 6px; }
+.sys-card b { font-size: 32px; color: var(--navy); line-height: 1.2; }
+.sys-card small { font-size: 18px; color: var(--muted); letter-spacing: .03em; }
+.sys-desc { font-size: 19px; color: var(--muted); min-height: 2.6em; }
+.sys-go { margin-top: 10px; background: var(--navy); color: #fff; border-radius: 12px; padding: 10px 26px; font-size: 24px; font-weight: 700; width: 100%; }
+.sys-card:hover .sys-go { background: var(--gold); }
+.sys-card.current .sys-go { background: #e3e8f3; color: var(--navy); }
+.sys-hint { color: var(--muted); font-size: 19px; margin-top: 18px; }
+.sys-switch { margin: 0 16px 6px; justify-content: center; }
+.brand-svg { display: block; width: 50px; height: 50px; color: var(--navy); }
+#brand-icon { display: block; flex-shrink: 0; }
+
+/* ---------- cheque ---------- */
+.chq .chq-paper { position: absolute; top: 0; left: 0; }
+.chq-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.chq-cells { display: inline-flex; }
+.chq-cells span { display: inline-block; text-align: center; }
+.chq-cross { transform-origin: left center; border-top: 1.4px solid #000; border-bottom: 1.4px solid #000; text-align: center; white-space: nowrap; padding: .4mm 0; line-height: 1.15; }
+.chq-cross.nolines { border: 0; }
+.chq-line { height: var(--t); background: #000; }
+.chq-line.double { box-shadow: 0 var(--g) 0 #000; }
+.chq-payee { display: flex; align-items: baseline; }
+.chq-payee .chq-ptext { flex: none; }
+.chq-fill { flex: 1 1 auto; min-width: 2mm; height: 0; border-bottom: 0.3mm solid #000; margin-left: .6mm; transform: translateY(var(--fdy)); }
+.chq-fill.dashed { border-bottom-style: dashed; }
+.chq-words { font-size: 18px; color: var(--navy); background: var(--gold-soft); border-radius: 8px; padding: 6px 10px; min-height: 36px; }
+.badge.b-ac { background: #e7ecf8; color: #1d3a82; }
+.badge.b-nonac { background: #f1f1f1; color: #555; }
+.amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---------- ตั้งค่าการเชื่อมต่อฐานข้อมูล (ก่อนหน้าเข้าสู่ระบบ) ---------- */
+.login-card.setup-card { max-width: 640px; width: 100%; }
+.setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+.setup-grid .full { grid-column: 1 / -1; }
+.setup-grid label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 18px; }
+.setup-grid label.check input { width: auto; }
+.setup-result:empty { display: none; }
+.setup-result { border-radius: 10px; padding: 8px 12px; font-size: 18px; line-height: 1.35; background: #f3f5fa; }
+.setup-result.ok { background: #e8f6ee; color: #17663a; }
+.setup-result.bad { background: #fdecec; color: #a02121; }
+.setup-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+.setup-hint { font-size: 17px; margin: 12px 0 0; text-align: left; line-height: 1.4; }
+.seed-steps { text-align: left; font-size: 18px; line-height: 1.6; margin: 8px 0 0; }
+.seed-steps .done { color: #17663a; } .seed-steps .run { color: var(--navy); font-weight: 600; } .seed-steps .wait { color: var(--muted); }
+@media (max-width: 560px) { .setup-grid { grid-template-columns: 1fr; } }
+
+/* ---------- ภาพเช็คเปล่าของธนาคาร (หน้าผู้ดูแลระบบเช็ค) ---------- */
+.bank-pics { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
+.bank-pic { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
+.bank-pic-img { aspect-ratio: 241.3 / 88.9; background: #f3f5fa; display: flex; align-items: center; justify-content: center; }
+.bank-pic-img img { width: 100%; height: 100%; object-fit: fill; display: block; }
+.bank-pic-bar { display: flex; gap: 8px; align-items: center; padding: 8px 10px; flex-wrap: wrap; }
+.bank-pic-bar .spacer { flex: 1; }
+
+/* ---------- แบบฟอร์มเช็ค: บาร์โค้ด, ตัวอักษรแยกช่อง, กรอบปรับขนาด ---------- */
+.env-item.barcode { white-space: pre; letter-spacing: 0; line-height: 1; }
+.chq-sel-box { position: absolute; border: 1.5px dashed #2b6cff; pointer-events: none; z-index: 5; }
+.chq-sel-box .h { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid #2b6cff; border-radius: 3px; pointer-events: auto; touch-action: none; }
+.chq-sel-box .h-e { right: -7px; top: 50%; margin-top: -6px; cursor: ew-resize; }
+.chq-sel-box .h-s { bottom: -7px; left: 50%; margin-left: -6px; cursor: ns-resize; }
+.chq-sel-box .h-se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.chq-sel-box .tip { position: absolute; left: 0; top: -24px; background: #2b6cff; color: #fff; font-size: 14px; line-height: 1; padding: 4px 6px; border-radius: 4px; white-space: nowrap; }
+.lay-frame { position: relative; }
+.ce-selbar { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; margin: 10px 0 0; background: #f7f9fd; }
+.ce-selbar .nm { font-weight: 600; color: var(--navy); align-self: center; min-width: 120px; }
+.ce-selbar label { margin: 0; }
+.ce-selbar .tg { display: flex; gap: 4px; }
+.ce-selbar .tg button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+.chq-extra { border: 1px dashed var(--gold, #c9a54a); border-radius: 10px; padding: 10px; }
+.chq-extra b { color: var(--navy); }
+.src-badge { font-size: 13px; padding: 1px 6px; border-radius: 6px; background: #eef2fb; color: var(--navy); margin-left: 4px; white-space: nowrap; }
+.src-badge.field { background: #fff4d6; color: #8a5a00; }
+.swal-form label.radio-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); cursor: pointer; }
+.swal-form label.radio-row input { width: auto; margin-top: 6px; }
+.swal-form label.radio-row:has(input:checked) { border-color: var(--navy); background: #f1f5fd; }

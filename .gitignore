@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+private/config.php
+private/backups/*
+!private/backups/.htaccess
+dist/

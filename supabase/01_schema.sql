@@ -166,6 +166,9 @@ create table if not exists public.profiles (
   active     boolean not null default false,
   created_at timestamptz default now()
 );
+-- which systems a user may use (admins always have both)
+alter table public.profiles add column if not exists perm_envelope boolean not null default true;
+alter table public.profiles add column if not exists perm_cheque   boolean not null default false;
 
 -- ---------------------------------------------------------------------
 -- 5) Helper functions
@@ -180,6 +183,16 @@ language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and active);
 $$;
 
+create or replace function public.is_envelope_user() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and active and (role = 'admin' or perm_envelope));
+$$;
+
+create or replace function public.is_cheque_user() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and active and (role = 'admin' or perm_cheque));
+$$;
+
 create or replace function public.is_admin() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and active and role = 'admin');
@@ -192,11 +205,11 @@ language plpgsql security definer set search_path = public as $$
 declare first_user boolean;
 begin
   select not exists (select 1 from public.profiles) into first_user;
-  insert into public.profiles (id, email, full_name, role, active)
+  insert into public.profiles (id, email, full_name, role, active, perm_envelope, perm_cheque)
   values (new.id, new.email,
           coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email,'@',1)),
           case when first_user then 'admin' else 'staff' end,
-          first_user);
+          first_user, true, first_user);
   return new;
 end $$;
 
@@ -242,8 +255,8 @@ declare
   new_id bigint;
   ids    bigint[] := '{}';
 begin
-  if not public.is_active_user() then
-    raise exception 'ไม่มีสิทธิ์ใช้งาน กรุณาติดต่อผู้ดูแลระบบ';
+  if not public.is_envelope_user() then
+    raise exception 'ไม่มีสิทธิ์ใช้งานระบบพิมพ์ซอง กรุณาติดต่อผู้ดูแลระบบ';
   end if;
   if p_customer_ids is null or array_length(p_customer_ids,1) is null then
     raise exception 'กรุณาเลือกผู้รับอย่างน้อย 1 รายการ';
@@ -298,7 +311,7 @@ create or replace function public.mark_printed(p_ids bigint[], p_envelope text d
 returns int language plpgsql security definer set search_path = public as $$
 declare n int; me text;
 begin
-  if not public.is_active_user() then raise exception 'ไม่มีสิทธิ์ใช้งาน'; end if;
+  if not public.is_envelope_user() then raise exception 'ไม่มีสิทธิ์ใช้งานระบบพิมพ์ซอง'; end if;
   select coalesce(full_name, email) into me from public.profiles where id = auth.uid();
   update public.letters
      set status = 'printed', print_count = print_count + 1, printed_at = now(),
@@ -316,7 +329,7 @@ returns table (period_key text, white bigint, brown bigint, total bigint, envelo
 language plpgsql stable security definer set search_path = public as $$
 declare unit text; fmt text;
 begin
-  if not public.is_active_user() then raise exception 'ไม่มีสิทธิ์ใช้งาน'; end if;
+  if not public.is_envelope_user() then raise exception 'ไม่มีสิทธิ์ใช้งานระบบพิมพ์ซอง'; end if;
   unit := case p_period when 'year' then 'year' when 'month' then 'month' else 'day' end;
   fmt  := case unit when 'year' then 'YYYY' when 'month' then 'YYYY-MM' else 'YYYY-MM-DD' end;
   return query
@@ -333,7 +346,7 @@ end $$;
 create or replace function public.cancel_letter(p_id bigint, p_reason text)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  if not public.is_active_user() then raise exception 'ไม่มีสิทธิ์ใช้งาน'; end if;
+  if not public.is_envelope_user() then raise exception 'ไม่มีสิทธิ์ใช้งานระบบพิมพ์ซอง'; end if;
   update public.letters set status = 'cancelled', cancel_reason = nullif(trim(p_reason),'')
    where id = p_id and (created_by = auth.uid() or public.is_admin());
   if not found then raise exception 'ยกเลิกได้เฉพาะเลขที่ตนเองออก (หรือผู้ดูแลระบบ)'; end if;
@@ -345,7 +358,7 @@ create or replace function public.update_letter(
   p_postcode text, p_subject text, p_urgency text
 ) returns void language plpgsql security definer set search_path = public as $$
 begin
-  if not public.is_active_user() then raise exception 'ไม่มีสิทธิ์ใช้งาน'; end if;
+  if not public.is_envelope_user() then raise exception 'ไม่มีสิทธิ์ใช้งานระบบพิมพ์ซอง'; end if;
   if coalesce(trim(p_name),'') = '' then raise exception 'กรุณากรอกชื่อผู้รับ'; end if;
   update public.letters set
     recipient_name = trim(p_name), recipient_address = nullif(trim(p_address),''),
@@ -395,7 +408,7 @@ returns table (letter_id bigint, book_id int, year int, doc_no int, doc_number t
                white bigint, brown bigint, prints bigint, last_printed_at timestamptz, printed_by text)
 language plpgsql stable security definer set search_path = public as $$
 begin
-  if not public.is_active_user() then raise exception 'ไม่มีสิทธิ์ใช้งาน'; end if;
+  if not public.is_envelope_user() then raise exception 'ไม่มีสิทธิ์ใช้งานระบบพิมพ์ซอง'; end if;
   return query
     select t.id, t.book_id, t.year, t.doc_no, t.doc_number, t.created_at,
            t.recipient_name, t.recipient_province, t.subject, t.status,
@@ -429,9 +442,17 @@ alter table public.envelope_layouts enable row level security;
 do $$
 declare t text;
 begin
-  foreach t in array array['settings','titles','provinces','postcodes','customers','books','letters','print_logs'] loop
+  -- shared reference data: any active user
+  foreach t in array array['settings','titles','provinces','postcodes'] loop
     execute format('drop policy if exists "%1$s read" on public.%1$s', t);
     execute format('create policy "%1$s read" on public.%1$s for select to authenticated using (public.is_active_user())', t);
+    execute format('drop policy if exists "%1$s admin" on public.%1$s', t);
+    execute format('create policy "%1$s admin" on public.%1$s for all to authenticated using (public.is_admin()) with check (public.is_admin())', t);
+  end loop;
+  -- envelope system data: users with envelope permission
+  foreach t in array array['customers','books','letters','print_logs'] loop
+    execute format('drop policy if exists "%1$s read" on public.%1$s', t);
+    execute format('create policy "%1$s read" on public.%1$s for select to authenticated using (public.is_envelope_user())', t);
     execute format('drop policy if exists "%1$s admin" on public.%1$s', t);
     execute format('create policy "%1$s admin" on public.%1$s for all to authenticated using (public.is_admin()) with check (public.is_admin())', t);
   end loop;
@@ -439,9 +460,9 @@ end $$;
 
 -- staff may add / edit recipients
 drop policy if exists "customers staff insert" on public.customers;
-create policy "customers staff insert" on public.customers for insert to authenticated with check (public.is_active_user());
+create policy "customers staff insert" on public.customers for insert to authenticated with check (public.is_envelope_user());
 drop policy if exists "customers staff update" on public.customers;
-create policy "customers staff update" on public.customers for update to authenticated using (public.is_active_user()) with check (public.is_active_user());
+create policy "customers staff update" on public.customers for update to authenticated using (public.is_envelope_user()) with check (public.is_envelope_user());
 
 -- profiles: see yourself; admins see & manage everyone
 drop policy if exists "profiles self" on public.profiles;
@@ -457,14 +478,14 @@ grant execute on function public.print_report(text, date, date) to authenticated
 grant execute on function public.print_report_items(date, date, text) to authenticated;
 revoke execute on function public.admin_confirm_user(uuid), public.admin_user_auth_status() from public, anon;
 grant execute on function public.admin_confirm_user(uuid), public.admin_user_auth_status() to authenticated;
-grant execute on function public.is_admin(), public.is_active_user(), public.be_year() to authenticated;
+grant execute on function public.is_admin(), public.is_active_user(), public.is_envelope_user(), public.is_cheque_user(), public.be_year() to authenticated;
 
 -- envelope layouts: everyone can see (to copy), save only as yourself, delete own (admin: any)
 drop policy if exists "layouts read" on public.envelope_layouts;
-create policy "layouts read" on public.envelope_layouts for select to authenticated using (public.is_active_user());
+create policy "layouts read" on public.envelope_layouts for select to authenticated using (public.is_envelope_user());
 drop policy if exists "layouts insert own" on public.envelope_layouts;
 create policy "layouts insert own" on public.envelope_layouts for insert to authenticated
-  with check (public.is_active_user() and user_id = auth.uid());
+  with check (public.is_envelope_user() and user_id = auth.uid());
 drop policy if exists "layouts delete own" on public.envelope_layouts;
 create policy "layouts delete own" on public.envelope_layouts for delete to authenticated
   using (user_id = auth.uid() or public.is_admin());
