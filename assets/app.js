@@ -2185,6 +2185,24 @@ async function loadChequeRefs() {
     must(S.sb.from('cheque_forms').select('*').eq('user_id', S.profile.id).order('created_at')),
   ]);
   S.chq = { ...(S.chq || {}), banks, accounts, forms };
+  if (!forms.length && !S.chq.autoStd) await autoStandardForms();
+}
+
+/**
+ * First time in the cheque system: give the user the 4 standard forms laid out on the real cheques
+ * (กรุงไทย / กสิกรไทย × A/C / Non-AC) so the database has them right away — editable / copyable later.
+ */
+async function autoStandardForms() {
+  S.chq.autoStd = true;
+  const rows = Object.values(CHEQUE_PRESETS).map((p) => ({ p, b: S.chq.banks.find((x) => x.code === p.bank) })).filter((x) => x.b)
+    .map(({ p, b }) => ({ user_id: S.profile.id, user_name: S.profile.full_name || S.profile.email, bank_id: b.id, crossing: p.crossing,
+      name: `แบบเช็คจริง ${p.label}`, layout: JSON.parse(JSON.stringify(p.layout)), is_default: true }));
+  if (!rows.length) return;
+  try {
+    const made = await must(S.sb.from('cheque_forms').insert(rows).select());
+    S.chq.forms = made;
+    ok(`สร้างแบบฟอร์มเช็คมาตรฐาน ${made.length} แบบให้แล้ว (ตามเช็คจริง กรุงไทย/กสิกรไทย A/C, Non-AC)`);
+  } catch (e) { console.warn('auto standard forms', e); }
 }
 const bankName = (id) => S.chq.banks.find((b) => b.id === id)?.short_name || 'ไม่ระบุ';
 const accName = (id) => S.chq.accounts.find((a) => a.id === id)?.name || '';
