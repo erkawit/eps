@@ -217,7 +217,7 @@ schtasks /Create /TN "EnvelopeBackup" /SC DAILY /ST 00:00 /RU SYSTEM /TR "C:\xam
 ### 1) สร้างโปรเจกต์ Supabase และตาราง
 1. สมัคร/เข้า https://supabase.com → **New project** (Region: Singapore)
 2. **SQL Editor** → รันไฟล์ในโฟลเดอร์ `supabase/` **ตามลำดับ** (คัดลอกทั้งไฟล์ไปวางแล้วกด Run, รันซ้ำได้ไม่เสียข้อมูล):
-   `01_schema.sql` → `02_seed_master.sql` → `03a`, `03b` (รหัสไปรษณีย์) → `04a`, `04b` (ผู้รับ/หน่วยงาน) → `06_cheque_schema.sql` → `07a`–`07d` (เช็คเดิม) · (`05_optional_pg_cron.sql` ไม่บังคับ)
+   `01_schema.sql` → `02_seed_master.sql` → `03a`, `03b` (รหัสไปรษณีย์) → `04a`, `04b` (ผู้รับ/หน่วยงาน) → `06_cheque_schema.sql` → `07_seed_cheques_01` – `07_seed_cheques_10` (เช็คเดิม แบ่งไฟล์ละไม่เกิน ~440 KB เพราะ SQL Editor รับไฟล์ใหญ่ไม่ได้) · (`05_optional_pg_cron.sql` ไม่บังคับ)
 3. **Authentication → Sign In / Providers → Email**: แนะนำปิด **Confirm email** (ผู้ใช้ที่ผู้ดูแลสร้างให้เข้าสู่ระบบได้ทันทีอยู่แล้ว)
 4. **Project Settings → API**: จดค่า **Project URL**, **anon / publishable key** และ **service_role / secret key** (ค่าสุดท้ายเป็นความลับ ใช้ใน Vercel เท่านั้น)
 
@@ -265,7 +265,7 @@ envelope-print-system/          ← วางใน C:\xampp\htdocs\
 ├── fonts/                      # TH SarabunPSK (.woff, OFL) + TH Sarabun / TH SarabunIT๙ / บาร์โค้ด Code 39, Code 128 (ไฟล์ที่หน่วยงานให้มา แปลงเป็น .woff)
 ├── config.js                   # โหมดฐานข้อมูล (ว่าง = MySQL · Vercel สร้างให้ = Supabase)
 ├── vercel.json, package.json, scripts/build-config.js, .vercelignore   # สำหรับ Vercel
-├── supabase/                   # SQL สำหรับโหมด Supabase (01 → 07d)
+├── supabase/                   # SQL สำหรับโหมด Supabase (01 → 07_seed_cheques_10)
 ├── api/
 │   ├── admin-users.js, backup.js   # Vercel Functions (โหมด Supabase): สร้างผู้ใช้/ตั้งรหัสผ่าน, สำรองข้อมูล + Cron
 │   ├── index.php               # API ทั้งหมดของโหมด MySQL (api/index.php?a=...)
