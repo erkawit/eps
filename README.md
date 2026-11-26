@@ -53,16 +53,19 @@
 
 **เทคโนโลยี:** HTML + JavaScript · [SweetAlert2](https://sweetalert2.github.io) · ฐานข้อมูล**เลือกได้ 2 แบบ** (ฟีเจอร์เหมือนกันทุกอย่าง):
 
-| | แบบที่ 1: MySQL | แบบที่ 2: Supabase |
+| | แบบที่ 1: MySQL | แบบที่ 2: Neon PostgreSQL |
 |---|---|---|
 | เปิดเว็บจาก | XAMPP (`http://<เครื่องเซิร์ฟเวอร์>/envelope-print-system/`) | Vercel (GitHub → Vercel) |
-| ฐานข้อมูล | MySQL/MariaDB ของ XAMPP (PHP 7.4+/8.x) | Supabase (PostgreSQL + Auth + Storage) |
-| ตั้งค่าการเชื่อมต่อ | หน้าตั้งค่าก่อนหน้าเข้าสู่ระบบ → `private/config.php` | Vercel Environment Variables (หรือหน้าตั้งค่าก่อนเข้าสู่ระบบ) |
-| โครงสร้างตาราง | สร้างให้อัตโนมัติ (`database/`) | รันไฟล์ `supabase/*.sql` ที่ SQL Editor |
-| สำรองข้อมูล | โฟลเดอร์ `private/backups` | Supabase Storage (bucket `backups`) + Vercel Cron 00:00 |
-| ขั้นตอนติดตั้ง | หัวข้อ "ขั้นตอนติดตั้งบน XAMPP" | หัวข้อ "ขั้นตอนติดตั้งแบบ Supabase + Vercel" |
+| ฐานข้อมูล | MySQL/MariaDB ของ XAMPP (PHP 7.4+/8.x) | [Neon](https://neon.tech) (PostgreSQL แบบ serverless) ผ่าน Vercel Functions (`api/db.js`) |
+| เข้าสู่ระบบ | PHP session | cookie ที่ลงลายเซ็น (`AUTH_SECRET`) + รหัสผ่าน bcrypt ในตาราง `auth.users` |
+| ตั้งค่าการเชื่อมต่อ | หน้าตั้งค่าก่อนหน้าเข้าสู่ระบบ → `private/config.php` | Vercel Environment Variables (`DATABASE_URL`) |
+| โครงสร้างตาราง | สร้างให้อัตโนมัติ (`database/`) | `npm run db:setup` (รันไฟล์ `neon/*.sql`) |
+| สำรองข้อมูล | โฟลเดอร์ `private/backups` | ตาราง `backup_files` ใน Neon + Vercel Cron 00:00 |
+| ขั้นตอนติดตั้ง | หัวข้อ "ขั้นตอนติดตั้งบน XAMPP" | หัวข้อ "ขั้นตอนติดตั้งแบบ Neon + Vercel" |
 
-ระบบรู้เองว่าใช้แบบไหนจากไฟล์ `config.js`: บน XAMPP ไฟล์นี้ว่าง = MySQL · บน Vercel ระบบสร้างไฟล์ให้ตอน build = Supabase
+ระบบรู้เองว่าใช้แบบไหนจากไฟล์ `config.js`: บน XAMPP ไฟล์นี้ว่าง = MySQL · บน Vercel ระบบสร้างไฟล์ให้ตอน build = Neon (หน้าเว็บเรียก `/api/db`)
+
+> **ทำไมเปลี่ยนจาก Supabase เป็น Neon:** โปรเจกต์ Supabase แบบฟรีถูก **pause (offline) อัตโนมัติ** เมื่อไม่มีการใช้งานราว 7 วัน ต้องเข้าไปกด Restore เอง ส่วน Neon จะพักเครื่อง (scale to zero) หลังว่าง ~5 นาที แล้ว**ตื่นเองอัตโนมัติ**เมื่อมีคนเปิดใช้ (ครั้งแรกช้าขึ้นประมาณ 1 วินาที) จึงไม่เกิดปัญหาระบบล่ม
 
 **ฟอนต์:** ใช้ **TH SarabunPSK** เพียงฟอนต์เดียวทั้งระบบ ทั้งหน้าจอ ซอง และรายงาน (ฝังไฟล์ไว้ใน `fonts/` — SIL Open Font License จาก [SarabunConsortium/TH-Sarabun-PSK](https://github.com/SarabunConsortium/TH-Sarabun-PSK)) จึงพิมพ์ออกมาเหมือนกันทุกเครื่องโดยไม่ต้องติดตั้งฟอนต์
 
@@ -212,33 +215,60 @@ schtasks /Create /TN "EnvelopeBackup" /SC DAILY /ST 00:00 /RU SYSTEM /TR "C:\xam
 
 ---
 
-## ขั้นตอนติดตั้งแบบ Supabase + Vercel
+## ขั้นตอนติดตั้งแบบ Neon + Vercel
 
-### 1) สร้างโปรเจกต์ Supabase และตาราง
-1. สมัคร/เข้า https://supabase.com → **New project** (Region: Singapore)
-2. **SQL Editor** → รันไฟล์ในโฟลเดอร์ `supabase/` **ตามลำดับ** (คัดลอกทั้งไฟล์ไปวางแล้วกด Run, รันซ้ำได้ไม่เสียข้อมูล):
-   `01_schema.sql` → `02_seed_master.sql` → `03a`, `03b` (รหัสไปรษณีย์) → `04a`, `04b` (ผู้รับ/หน่วยงาน) → `06_cheque_schema.sql` → `07_seed_cheques_01` – `07_seed_cheques_10` (เช็คเดิม แบ่งไฟล์ละไม่เกิน ~440 KB เพราะ SQL Editor รับไฟล์ใหญ่ไม่ได้) · (`05_optional_pg_cron.sql` ไม่บังคับ)
-3. **Authentication → Sign In / Providers → Email**: แนะนำปิด **Confirm email** (ผู้ใช้ที่ผู้ดูแลสร้างให้เข้าสู่ระบบได้ทันทีอยู่แล้ว)
-4. **Project Settings → API**: จดค่า **Project URL**, **anon / publishable key** และ **service_role / secret key** (ค่าสุดท้ายเป็นความลับ ใช้ใน Vercel เท่านั้น)
+### 1) สร้างฐานข้อมูล Neon
+1. สมัคร/เข้า https://neon.tech → **New Project** (Region: **AWS Asia Pacific (Singapore)**, Postgres 16 หรือใหม่กว่า)
+   - หรือใน Vercel → โปรเจกต์ → **Storage → Create Database → Neon** (Vercel จะตั้ง `DATABASE_URL` ให้อัตโนมัติ)
+2. หน้า **Dashboard → Connect** คัดลอก connection string แบบ **Pooled connection** เช่น
+   `postgresql://neondb_owner:xxxx@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`
 
-### 2) ขึ้น GitHub และ Deploy บน Vercel
-1. push โฟลเดอร์โปรเจกต์ทั้งหมดขึ้น GitHub
-2. Vercel → **Add New → Project** → เลือก repository → Framework Preset: **Other** (ค่า Build/Output ใช้ตาม `vercel.json` อยู่แล้ว)
-3. **Environment Variables** (Settings → Environment Variables) แล้ว **Redeploy**:
+### 2) สร้างตาราง หรือย้ายข้อมูลจาก Supabase เดิม
+ต้องมี [Node.js](https://nodejs.org) 20 ขึ้นไปในเครื่อง แล้วเปิด Terminal / PowerShell ที่โฟลเดอร์โปรเจกต์ → `npm install` แล้วเลือก **อย่างใดอย่างหนึ่ง**:
+
+**ก) ระบบใหม่ (ไม่มีข้อมูลเดิม)** — สร้างตาราง + ข้อมูลเริ่มต้น (รหัสไปรษณีย์ ผู้รับ เช็คเดิมจาก Excel):
+```bash
+# macOS / Linux
+DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require" npm run db:setup
+# Windows PowerShell
+$env:DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require"; npm run db:setup
+```
+(เพิ่ม `-- --schema-only` ถ้าต้องการเฉพาะตาราง ไม่เอาข้อมูลเดิมจาก Excel) — หรือคัดลอกไฟล์ `neon/*.sql` ไปรันที่ **Neon → SQL Editor** ตามลำดับชื่อไฟล์ก็ได้ (`00_auth_shim.sql` ก่อนเสมอ)
+
+**ข) ย้ายข้อมูลจาก Supabase ที่ใช้อยู่** — คัดลอกทุกตาราง + ผู้ใช้ (**รหัสผ่านเดิมใช้ได้เลย** เพราะเป็น bcrypt แบบเดียวกัน):
+1. Supabase → โปรเจกต์ → ปุ่ม **Connect** → คัดลอก **Session pooler** connection string (ใส่รหัสผ่านฐานข้อมูลแทน `[YOUR-PASSWORD]`) — ถ้าโปรเจกต์ถูก pause ให้กด **Restore** ก่อน
+2. รัน:
+```bash
+# Windows PowerShell
+$env:SUPABASE_DB_URL="postgresql://postgres.xxxx:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+$env:DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require"
+npm run db:migrate-from-supabase
+```
+- สคริปต์จะสร้างตารางใน Neon ให้เอง คัดลอกข้อมูลใน transaction เดียว และแสดงจำนวนแถวต้นทาง → ปลายทางให้ตรวจสอบ
+- ถ้าต้องการย้าย**ไฟล์สำรองเดิม**ใน Supabase Storage มาด้วย ให้ตั้ง `SUPABASE_URL` และ `SUPABASE_SERVICE_ROLE_KEY` เพิ่มก่อนรัน
+- Neon มีข้อมูลอยู่แล้ว สคริปต์จะหยุดเพื่อป้องกันข้อมูลหาย — เพิ่ม `-- --replace` ถ้าต้องการล้างแล้วคัดลอกใหม่
+- **Supabase เปิดไม่ได้แล้ว?** ใช้ไฟล์สำรองของระบบ (.json หรือ .json.gz ที่ดาวน์โหลดไว้) แทน:
+  `npm run db:migrate-from-supabase -- --from-backup=backup_2569-10-23_103015_manual.json.gz --temp-password=Temp1234`
+  (ไฟล์สำรองไม่มีรหัสผ่าน ทุกคนเข้าด้วยรหัสชั่วคราวนี้แล้วเปลี่ยนเองที่ชื่อผู้ใช้มุมซ้ายล่าง)
+
+### 3) Deploy บน Vercel
+1. push โปรเจกต์ขึ้น GitHub → Vercel → **Add New → Project** → เลือก repository → Framework Preset: **Other** (ค่า Build/Output ใช้ตาม `vercel.json`)
+2. **Settings → Environment Variables** แล้ว **Redeploy**:
 
 | ชื่อ | ค่า |
 |---|---|
-| `SUPABASE_URL` | Project URL เช่น `https://xxxx.supabase.co` |
-| `SUPABASE_ANON_KEY` | anon / publishable key |
-| `SUPABASE_SERVICE_ROLE_KEY` | service_role / secret key — ใช้สร้างผู้ใช้, ตั้งรหัสผ่านใหม่, สำรองข้อมูล (**ห้ามใส่ที่อื่น**) |
-| `CRON_SECRET` | ข้อความสุ่มยาว ๆ อะไรก็ได้ (Vercel ส่งให้ Cron อัตโนมัติ) |
+| `DATABASE_URL` | connection string ของ Neon (แบบ pooled) — **ความลับ** อยู่ฝั่งเซิร์ฟเวอร์เท่านั้น |
+| `AUTH_SECRET` | ข้อความสุ่มยาว ๆ (เช่นจาก `openssl rand -hex 32`) ใช้ลงลายเซ็น cookie เข้าสู่ระบบ — ถ้าเปลี่ยน ทุกคนต้องเข้าสู่ระบบใหม่ |
+| `CRON_SECRET` | ข้อความสุ่มยาว ๆ (Vercel ส่งให้ Cron สำรองข้อมูล 00:00 น. อัตโนมัติ) |
 
-4. เปิดเว็บ → กด **"ขอสิทธิ์ใช้งาน"** ผู้ใช้คนแรกเป็นผู้ดูแลระบบอัตโนมัติ
+3. เปิดเว็บ → ถ้าเป็นระบบใหม่ กด **"ขอสิทธิ์ใช้งาน"** ผู้ใช้คนแรกเป็นผู้ดูแลระบบอัตโนมัติ (ถ้าย้ายจาก Supabase เข้าสู่ระบบด้วยบัญชีเดิมได้เลย)
 
-- ถ้ายังไม่ได้ตั้ง Environment Variables หรือเชื่อมต่อไม่ได้ ระบบจะแสดง **หน้าตั้งค่าการเชื่อมต่อ Supabase ก่อนหน้าเข้าสู่ระบบ** (กรอก URL + anon key ได้ — มีผลเฉพาะเบราว์เซอร์นั้น)
-- ผู้ดูแลระบบดูสถานะได้ที่เมนู **การเชื่อมต่อฐานข้อมูล** (แหล่งที่มาของค่า, ตาราง, ฟังก์ชันสร้างผู้ใช้/สำรองข้อมูล)
+- ตัวแปรเดิม `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` **ลบออกจาก Vercel ได้** หลังย้ายเสร็จ (ระบบไม่ใช้แล้ว)
+- ถ้ายังไม่ได้ตั้ง `DATABASE_URL` หรือยังไม่ได้สร้างตาราง ระบบจะแสดงหน้าแจ้งสาเหตุและวิธีแก้ก่อนหน้าเข้าสู่ระบบ
+- ผู้ดูแลระบบดูสถานะได้ที่เมนู **การเชื่อมต่อฐานข้อมูล**
+- ทดสอบในเครื่องตัวเอง: `DATABASE_URL="..." npm run dev` → http://localhost:3000
 - บน Vercel ระบบ build คัดลอกเฉพาะไฟล์หน้าเว็บไปที่ `dist/` — ไฟล์ PHP/MySQL (`api/*.php`, `database/`, `private/`) ไม่ถูกส่งขึ้น (`.vercelignore`)
-- ย้ายข้อมูลระหว่าง 2 แบบ: ใช้ไฟล์สำรองข้อมูล (.json) ของระบบเป็นต้นทาง
+- Neon แบบฟรีมีพื้นที่ 0.5 GB ต่อโปรเจกต์ — ไฟล์สำรองแต่ละไฟล์ราว 1 MB ควรลบไฟล์สำรองเก่าที่ไม่ใช้เป็นระยะ (เมนู สำรองข้อมูล)
 
 ## คำแนะนำการพิมพ์ซอง
 - ฟอนต์ TH SarabunPSK ฝังมากับเว็บแล้ว ไม่ต้องติดตั้งในเครื่อง
@@ -255,19 +285,26 @@ envelope-print-system/          ← วางใน C:\xampp\htdocs\
 ├── index.html                  # หน้าเว็บ (ตั้งค่าการเชื่อมต่อ / เข้าสู่ระบบ / ระบบงาน)
 ├── assets/
 │   ├── app.js                  # หน้าจอทั้งหมด (เจ้าหน้าที่ + Admin + รายงาน + สำรองข้อมูล + เช็ค)
-│   ├── backend.js              # เลือกฐานข้อมูล MySQL / Supabase และส่วนที่ต่างกัน
-│   ├── db.js                   # ตัวเชื่อมหน้าเว็บกับ API (PHP) แบบเดียวกับ supabase-js
+│   ├── backend.js              # เลือกฐานข้อมูล MySQL / Neon และส่วนที่ต่างกัน
+│   ├── db.js                   # ตัวเชื่อมหน้าเว็บกับ API (PHP หรือ /api/db) รูปแบบคำสั่งแบบ supabase-js
 │   ├── envelope.js             # รูปแบบซองและขนาดพิมพ์
 │   ├── cheque.js               # รูปแบบเช็ค 3.5"×9.5" (แบบมาตรฐานตามรายงานเดิม) + จำนวนเงินเป็นตัวอักษรไทย
 │   ├── style.css, logo.png
 │   ├── cheques/                # ภาพเช็คเปล่าจริง ktb.jpg / kbank.jpg (ภาพด้านหลังตอนตั้งค่า ไม่ถูกพิมพ์)
 │   └── vendor/                 # (ไม่บังคับ) sweetalert2.all.min.js สำหรับใช้งานแบบไม่มีอินเทอร์เน็ต
 ├── fonts/                      # TH SarabunPSK (.woff, OFL) + TH Sarabun / TH SarabunIT๙ / บาร์โค้ด Code 39, Code 128 (ไฟล์ที่หน่วยงานให้มา แปลงเป็น .woff)
-├── config.js                   # โหมดฐานข้อมูล (ว่าง = MySQL · Vercel สร้างให้ = Supabase)
-├── vercel.json, package.json, scripts/build-config.js, .vercelignore   # สำหรับ Vercel
-├── supabase/                   # SQL สำหรับโหมด Supabase (01 → 07_seed_cheques_10)
+├── config.js                   # โหมดฐานข้อมูล (ว่าง = MySQL · Vercel สร้างให้ = Neon)
+├── vercel.json, package.json, .vercelignore   # สำหรับ Vercel
+├── scripts/
+│   ├── build-config.js         # build บน Vercel (สร้าง dist/ + config.js)
+│   ├── neon-setup.js           # npm run db:setup — สร้างตารางใน Neon
+│   ├── migrate-supabase-to-neon.js  # npm run db:migrate-from-supabase — ย้ายข้อมูล + ผู้ใช้จาก Supabase
+│   └── dev-server.js           # npm run dev — ทดสอบแบบ Vercel ในเครื่อง
+├── neon/                       # SQL สำหรับ Neon (00_auth_shim → 07_seed_cheques_10)
 ├── api/
-│   ├── admin-users.js, backup.js   # Vercel Functions (โหมด Supabase): สร้างผู้ใช้/ตั้งรหัสผ่าน, สำรองข้อมูล + Cron
+│   ├── db.js                   # Vercel Function (โหมด Neon): API ทั้งหมด /api/db?a=... (เข้าสู่ระบบ, อ่าน/เขียนตาราง, rpc, สำรองข้อมูล)
+│   ├── backup.js               # Vercel Cron 00:00 น. — สำรองข้อมูลอัตโนมัติ
+│   ├── _lib/                   # โค้ดร่วมของ Vercel Functions (เชื่อมต่อ Neon, เข้าสู่ระบบ, สิทธิ์, rpc, สำรองข้อมูล)
 │   ├── index.php               # API ทั้งหมดของโหมด MySQL (api/index.php?a=...)
 │   ├── lib.php, auth.php       # การเชื่อมต่อ PDO, เข้าสู่ระบบ, สิทธิ์
 │   ├── query.php               # อ่าน/เขียนตาราง + ตรวจสิทธิ์รายตาราง

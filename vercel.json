@@ -37,11 +37,11 @@
     }
   ],
   "functions": {
-    "api/backup.js": {
+    "api/db.js": {
       "maxDuration": 60
     },
-    "api/admin-users.js": {
-      "maxDuration": 30
+    "api/backup.js": {
+      "maxDuration": 60
     }
   },
   "crons": [

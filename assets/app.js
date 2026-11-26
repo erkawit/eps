@@ -1,8 +1,8 @@
 // =====================================================================
 //  ระบบพิมพ์ซองจดหมาย — Envelope Printing System
-//  Vanilla JS + PHP/MySQL (XAMPP) + SweetAlert2 (no build step)
+//  Vanilla JS + PHP/MySQL (XAMPP) หรือ Vercel + Neon PostgreSQL + SweetAlert2 (no build step)
 // =====================================================================
-import { api, IS_SUPA, makeBackend, supaConn, supaClient, supaTest, saveManualConn, clearManualConn, hasManualConn, CFG } from './backend.js';
+import { api, IS_NEON, makeBackend } from './backend.js';
 import { CHEQUE, CHQ_ITEMS, chqItemDef, bahtText, money, renderCheque, resolveChequeLayout, defaultChequeLayout, chequePreset, CHEQUE_PRESETS, BANK_BG, chequePage, chequePageCss, SAMPLE_CHEQUE, CHQ_FONTS, chqFont, CHQ_SOURCES, chqSource, chqItemLabel, splitDateItem, FIELD_TYPES } from './cheque.js';
 import { ENVELOPES, ITEM_DEFS, itemDef, esc, renderEnvelope, fitEnvelopeText, pageCss, envSize, areaLine, SAMPLE_LETTER, resolveLayout, defaultLayout } from './envelope.js';
 
@@ -18,7 +18,7 @@ const S = {
   reg: null,
 };
 
-/** Database-specific operations (MySQL via PHP, or Supabase + Vercel functions). */
+/** Database-specific operations (MySQL via PHP, or Neon via Vercel functions). */
 const BK = makeBackend(() => S.sb, () => S.profile);
 const isAdmin = () => S.profile?.role === 'admin';
 const URGENCY = ['ปกติ', 'ด่วน', 'ด่วนมาก', 'ด่วนที่สุด'];
@@ -185,13 +185,12 @@ function show(id) {
 }
 
 async function boot() {
-  $('#link-conn').addEventListener('click', (e) => { e.preventDefault(); if (IS_SUPA) showSupaSetup({ reason: 'แก้ไขการเชื่อมต่อ Supabase (บันทึกไว้ในเบราว์เซอร์นี้)' }, true); else showSetup(S.dbStatus, true); });
-  if (IS_SUPA) return bootSupabase();
+  $('#link-conn').addEventListener('click', (e) => { e.preventDefault(); showSetup(S.dbStatus, true); });
   S.dbStatus = await dbStatus();
   const st = S.dbStatus;
   // ยังไม่ได้ตั้งค่า / เชื่อมต่อไม่ได้ / ยังไม่ได้ติดตั้งตาราง → หน้าตั้งค่าการเชื่อมต่อก่อนหน้าเข้าสู่ระบบ
-  if (!st || !st.configured || !st.connected || !st.installed) return showSetup(st);
-  $('#link-conn-wrap').classList.toggle('hidden', !st.can_setup);
+  if (!st || !st.configured || !st.connected || !st.installed) return IS_NEON ? showNeonSetup(st) : showSetup(st);
+  $('#link-conn-wrap').classList.toggle('hidden', IS_NEON || !st.can_setup);
   S.sb = BK.createClient();
   S.sb.onUnauthorized = () => { if (S.profile) sessionExpired(); };
   const { data: { session } } = await S.sb.auth.getSession();
@@ -200,62 +199,20 @@ async function boot() {
 }
 
 // ---------------------------------------------------------------------
-//  โหมด Supabase (เปิดเว็บจาก Vercel): ค่าการเชื่อมต่อมาจาก Environment Variables ของ Vercel
-//  ถ้ายังไม่ได้ตั้งค่า / เชื่อมต่อไม่ได้ → หน้าตั้งค่าการเชื่อมต่อก่อนหน้าเข้าสู่ระบบ
+//  โหมด Neon (เปิดเว็บจาก Vercel): ค่าการเชื่อมต่อคือ DATABASE_URL ใน Vercel Environment Variables
+//  (ตั้งจากหน้าเว็บไม่ได้ เพราะเป็นความลับของเซิร์ฟเวอร์) — หน้านี้บอกสาเหตุและวิธีแก้
 // ---------------------------------------------------------------------
-async function bootSupabase() {
-  const conn = supaConn();
-  if (!conn) return showSupaSetup({ reason: 'ยังไม่ได้ตั้งค่าการเชื่อมต่อ Supabase — กรุณาตั้งค่าก่อนเข้าใช้งานระบบ' });
-  const t = await supaTest(conn.url, conn.key);
-  if (!t.ok || !t.installed) return showSupaSetup({ reason: `⚠️ ${t.message}`, conn });
-  try { S.sb = await supaClient(conn); } catch { return showSupaSetup({ reason: '⚠️ โหลดไลบรารี Supabase ไม่ได้ — ตรวจสอบอินเทอร์เน็ต', conn }); }
-  S.conn = conn;
-  $('#link-conn-wrap').classList.add('hidden');
-  const { data: { session } } = await S.sb.auth.getSession();
-  if (!session) return show('#login-screen');
-  await enterApp(session);
-}
-
-function showSupaSetup(st = {}, fromLogin = false) {
+function showNeonSetup(st = {}) {
   show('#setup-screen');
-  $('#setup-screen h2').textContent = 'ตั้งค่าการเชื่อมต่อ Supabase';
-  $('#setup-reason').innerHTML = esc(st.reason || '');
-  const form = $('#setup-form');
-  if (!form.dataset.supa) {
-    form.dataset.supa = '1';
-    const cur = st.conn || supaConn() || {};
-    form.innerHTML = `<div class="setup-grid">
-        <label class="full">Project URL<input name="url" placeholder="https://xxxxxxxx.supabase.co" value="${esc(cur.url || '')}" required></label>
-        <label class="full">anon / publishable key<input name="key" placeholder="eyJhbGciOi... หรือ sb_publishable_..." value="${esc(cur.key || '')}" required autocomplete="off"></label>
-      </div>
-      <div id="setup-result" class="setup-result"></div>
-      <div class="setup-actions">
-        <button type="button" class="btn" id="setup-test">🔌 ทดสอบการเชื่อมต่อ</button>
-        <button type="submit" class="btn btn-primary">💾 บันทึกและเชื่อมต่อ</button>
-      </div>`;
-    $('.setup-hint').innerHTML = `ค่าอยู่ที่ Supabase → <b>Project Settings → API</b> (ใช้ <b>anon / publishable key</b> เท่านั้น ห้ามใช้ service_role) · ค่าที่กรอกที่นี่ใช้ได้เฉพาะเบราว์เซอร์นี้ — <b>แนะนำตั้ง SUPABASE_URL และ SUPABASE_ANON_KEY ใน Vercel → Environment Variables แล้ว Redeploy</b> ทุกเครื่องจะเชื่อมต่อได้ทันที · ก่อนใช้งานครั้งแรก รันไฟล์ในโฟลเดอร์ <b>supabase/</b> ที่ SQL Editor ตามลำดับ (ดู README)`;
-    const read = () => { const f = new FormData(form); return { url: String(f.get('url') || '').trim(), key: String(f.get('key') || '').trim() }; };
-    const result = (cls, html) => { $('#setup-result').className = `setup-result ${cls}`; $('#setup-result').innerHTML = html; };
-    $('#setup-test').addEventListener('click', async () => {
-      result('', 'กำลังทดสอบการเชื่อมต่อ...');
-      const d = read(); const t = await supaTest(d.url, d.key);
-      result(t.ok && t.installed ? 'ok' : 'bad', `${t.ok && t.installed ? '✔' : '✕'} ${esc(t.message)}`);
-    });
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const d = read();
-      Swal.fire({ title: 'กำลังเชื่อมต่อ Supabase...', allowOutsideClick: false, showConfirmButton: false, didOpen: () => Swal.showLoading() });
-      const t = await supaTest(d.url, d.key);
-      if (!t.ok || !t.installed) return Swal.fire({ icon: 'error', title: 'เชื่อมต่อไม่สำเร็จ', text: t.message, confirmButtonText: 'ตกลง' });
-      saveManualConn(d.url, d.key);
-      await Swal.fire({ icon: 'success', title: 'เชื่อมต่อ Supabase สำเร็จ', html: '<span class="muted">บันทึกไว้ในเบราว์เซอร์นี้ — เครื่องอื่นให้ตั้งค่าใน Vercel Environment Variables</span>', confirmButtonText: 'ตกลง' });
-      location.replace(location.pathname);
-    });
-  }
-  if (fromLogin && !$('#setup-back')) {
-    form.querySelector('.setup-actions').insertAdjacentHTML('afterbegin', '<button type="button" class="btn btn-ghost" id="setup-back">← กลับหน้าเข้าสู่ระบบ</button>');
-    $('#setup-back').addEventListener('click', () => show('#login-screen'));
-  }
+  $('#setup-screen h2').textContent = 'การเชื่อมต่อฐานข้อมูล Neon';
+  const reason = !st || st.unreachable ? `⚠️ ${st?.error || 'ติดต่อเซิร์ฟเวอร์ไม่ได้'}`
+    : !st.configured ? 'ยังไม่ได้ตั้งค่า DATABASE_URL ใน Vercel → Settings → Environment Variables'
+      : !st.connected ? `⚠️ ${st.error || 'เชื่อมต่อฐานข้อมูล Neon ไม่ได้'}`
+        : `เชื่อมต่อ Neon ได้ แต่ยังไม่ได้สร้างตาราง (ขาด ${(st.missing || []).length} ตาราง: ${(st.missing || []).slice(0, 6).join(', ')}${(st.missing || []).length > 6 ? ' …' : ''})`;
+  $('#setup-reason').innerHTML = esc(reason);
+  $('#setup-form').innerHTML = `<div class="setup-actions"><button type="button" class="btn btn-primary" id="setup-retry">🔄 ลองใหม่</button></div>`;
+  $('#setup-retry').addEventListener('click', () => location.reload());
+  $('.setup-hint').innerHTML = `วิธีแก้: 1) สร้างฐานข้อมูลที่ <b>neon.tech</b> (Region: Singapore) 2) ตั้ง <b>DATABASE_URL</b> (connection string แบบ pooled) และ <b>AUTH_SECRET</b> ใน Vercel → Environment Variables แล้ว <b>Redeploy</b> 3) สร้างตารางด้วยคำสั่ง <code>npm run db:setup</code> (หรือย้ายข้อมูลจาก Supabase ด้วย <code>npm run db:migrate-from-supabase</code>) — ดู README หัวข้อ "Neon + Vercel"`;
 }
 
 let expiredShown = false;
@@ -454,7 +411,6 @@ $('#link-register').addEventListener('click', async (e) => {
     if (error) throw error;
     Swal.close();
     if (data.session) return enterApp(data.session, true);
-    if (IS_SUPA) return Swal.fire({ icon: 'success', title: 'ส่งคำขอแล้ว', html: 'ผู้ใช้คนแรกของระบบเป็นผู้ดูแลระบบอัตโนมัติ — เข้าสู่ระบบได้เลย<br>ผู้ใช้ถัดไปรอผู้ดูแลอนุมัติ<br><span class="muted">(ถ้าโปรเจกต์ Supabase เปิด "Confirm email" ต้องยืนยันอีเมลก่อน)</span>' });
     Swal.fire({ icon: 'success', title: data.user && !S.dbStatus?.has_users ? 'สร้างบัญชีผู้ดูแลระบบแล้ว' : 'ส่งคำขอแล้ว', text: data.user && !S.dbStatus?.has_users ? 'บัญชีแรกของระบบเป็นผู้ดูแลระบบ — เข้าสู่ระบบได้เลย' : 'กรุณารอผู้ดูแลระบบอนุมัติ เมื่ออนุมัติแล้วเข้าสู่ระบบได้ทันที' }).then(() => { if (S.dbStatus) S.dbStatus.has_users = true; });
   } catch (err) { fail(err); }
 });
@@ -1678,18 +1634,18 @@ async function viewBackup() {
   </div>
   <div class="grid-2" style="margin-top:16px">
     <div class="card"><div class="card-head"><h3>สำรองข้อมูลตอนนี้</h3></div>
-      <p style="margin-top:0">${IS_SUPA ? '' : ''}สำรองทุกตาราง (${BACKUP_TABLES.length} ตาราง) เก็บใน${esc(BK.backupWhere)} แยกตาม <b>ปี พ.ศ. → เดือน → วันที่</b></p>
+      <p style="margin-top:0">สำรองทุกตาราง (${BACKUP_TABLES.length} ตาราง) เก็บใน${esc(BK.backupWhere)} แยกตาม <b>ปี พ.ศ. → เดือน → วันที่</b></p>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin-bottom:12px"><input type="checkbox" id="bk-dl"> ดาวน์โหลดไฟล์สำรอง (.json) ลงเครื่องนี้ด้วย</label>
       <button class="btn btn-gold btn-block" id="bk-run">💾 สำรองข้อมูลตอนนี้</button></div>
     <div class="card"><div class="card-head"><h3>สำรองข้อมูลอัตโนมัติ</h3>
       ${autoOk ? '<span class="badge b-printed">✔ เปิดใช้งาน</span>' : '<span class="badge b-cancelled">ยังไม่ได้ตั้งค่า</span>'}</div>
-      <p style="margin-top:0">หลังเวลา <b>00:00 น.</b> ของทุกวัน ระบบจะตรวจว่าเมื่อวานมีการกด "สำรองข้อมูลตอนนี้" หรือไม่ — <b>ถ้าไม่มี จะสำรองให้อัตโนมัติ</b> ${IS_SUPA ? '(Vercel Cron เรียกทุกวันเวลา 00:00 น.)' : '(ทำงานเมื่อมีผู้เปิดใช้ระบบครั้งแรกของวัน หรือตั้ง Windows Task Scheduler ให้ตรงเวลา 00:00 ตาม README)'}</p>
+      <p style="margin-top:0">หลังเวลา <b>00:00 น.</b> ของทุกวัน ระบบจะตรวจว่าเมื่อวานมีการกด "สำรองข้อมูลตอนนี้" หรือไม่ — <b>ถ้าไม่มี จะสำรองให้อัตโนมัติ</b> ${IS_NEON ? '(Vercel Cron เรียกทุกวันเวลา 00:00 น.)' : '(ทำงานเมื่อมีผู้เปิดใช้ระบบครั้งแรกของวัน หรือตั้ง Windows Task Scheduler ให้ตรงเวลา 00:00 ตาม README)'}</p>
       <p class="muted" style="font-size:18px;margin:0 0 10px">${autoOk
     ? (manualRecent ? 'มีการกดสำรองข้อมูลภายใน 24 ชม. ที่ผ่านมา คืนนี้ระบบอาจข้ามการสำรองอัตโนมัติ' : autoRecent ? 'ระบบสำรองอัตโนมัติทำงานปกติ' : 'ยังไม่พบไฟล์สำรองอัตโนมัติในช่วง 2 วันที่ผ่านมา (ถ้าเพิ่งติดตั้ง ให้รอถึงวันถัดไป หรือกดทดสอบ)')
-    : IS_SUPA ? 'ต้องตั้งค่า SUPABASE_SERVICE_ROLE_KEY และ CRON_SECRET ใน Vercel แล้ว Redeploy (ดู README)' : 'เขียนไฟล์ในโฟลเดอร์ private/backups ไม่ได้ — ตรวจสอบสิทธิ์โฟลเดอร์บนเครื่องเซิร์ฟเวอร์'}</p>
+    : IS_NEON ? 'ต้องตั้งค่า DATABASE_URL และ CRON_SECRET ใน Vercel แล้ว Redeploy (ดู README)' : 'เขียนไฟล์ในโฟลเดอร์ private/backups ไม่ได้ — ตรวจสอบสิทธิ์โฟลเดอร์บนเครื่องเซิร์ฟเวอร์'}</p>
       <button class="btn" id="bk-test" ${autoOk ? '' : 'disabled'}>▶️ ทดสอบการสำรองอัตโนมัติ (ฝั่งเซิร์ฟเวอร์)</button></div>
   </div>
-  <div class="card" style="margin-top:16px"><div class="card-head"><h3>โฟลเดอร์สำรองข้อมูล</h3><span class="muted" style="font-size:18px">${IS_SUPA ? 'Storage bucket: <b>backups</b>' : 'โฟลเดอร์: <b>private/backups</b>'}</span></div>
+  <div class="card" style="margin-top:16px"><div class="card-head"><h3>โฟลเดอร์สำรองข้อมูล</h3><span class="muted" style="font-size:18px">${IS_NEON ? 'ตารางฐานข้อมูล: <b>backup_files</b>' : 'โฟลเดอร์: <b>private/backups</b>'}</span></div>
     <div id="bk-tree">${backupTree(logs)}</div></div>`;
 
   $('#bk-run').addEventListener('click', async () => {
@@ -1750,73 +1706,42 @@ function backupTree(logs) {
 // =====================================================================
 //  ADMIN — การเชื่อมต่อฐานข้อมูล MySQL (XAMPP)
 // =====================================================================
-/** Admin page — Supabase mode (Vercel) */
-async function viewConnectionSupa() {
-  const c = S.conn || supaConn() || {};
-  const mask = (k) => (k ? `${k.slice(0, 12)}…${k.slice(-6)}` : '—');
-  const [t, fu, fb] = await Promise.all([
-    supaTest(c.url, c.key),
-    fetch('/api/admin-users?status=1', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    BK.backupStatus(),
-  ]);
-  const counts = {};
-  for (const tb of ['profiles', 'customers', 'letters', 'cheques', 'backup_logs']) {
-    const { count } = await S.sb.from(tb).select('id', { count: 'exact', head: true });
-    counts[tb] = count ?? 0;
-  }
+/** Admin page — Neon mode (Vercel) */
+async function viewConnectionNeon() {
+  view().innerHTML = '<div class="card empty">กำลังโหลด...</div>';
+  const c = await api('conn_info');
+  if (c.error) throw c.error;
+  const fb = await fetch('/api/backup?status=1', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   const row = (k, v) => `<tr><th style="position:static;width:170px">${k}</th><td style="word-break:break-all">${v}</td></tr>`;
   const chk = (okv, title, note) => `<div class="check-row"><span class="badge ${okv ? 'b-printed' : 'b-cancelled'}">${okv ? '✔' : '✕'}</span><div><b>${title}</b>${note ? `<div class="muted" style="font-size:18px">${note}</div>` : ''}</div></div>`;
+  const n = c.counts || {};
   view().innerHTML = `
   <div class="grid-2">
-    <div class="card"><div class="card-head"><h3>การเชื่อมต่อที่ใช้อยู่ — Supabase</h3><span class="badge ${t.ok ? 'b-printed' : 'b-cancelled'}">${t.ok ? '✔ เชื่อมต่อแล้ว' : '✕ มีปัญหา'}</span></div>
+    <div class="card"><div class="card-head"><h3>การเชื่อมต่อที่ใช้อยู่ — Neon PostgreSQL</h3><span class="badge b-printed">✔ เชื่อมต่อแล้ว</span></div>
       <table><tbody>
-        ${row('ที่มาของค่า', c.source === 'env' ? '<b>Vercel Environment Variables</b> (ใช้ได้ทุกเครื่อง)' : '<b>ตั้งค่าเองในเบราว์เซอร์นี้</b>')}
-        ${row('Project URL', esc(c.url || '—'))}
-        ${row('anon key', `<code>${esc(mask(c.key))}</code>`)}
-        ${row('สถานะ', esc(t.message))}
-      </tbody></table>
-      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
-        <button class="btn btn-primary" id="cn-supa">⚙️ ตั้งค่าเองในเบราว์เซอร์นี้</button>
-        ${hasManualConn() ? `<button class="btn" id="cn-clear">↺ ล้างค่าที่ตั้งเอง${CFG.SUPABASE_URL ? ' (กลับไปใช้ค่าจาก Vercel)' : ''}</button>` : ''}
-      </div></div>
+        ${row('ที่มาของค่า', '<b>Vercel Environment Variables</b> (DATABASE_URL)')}
+        ${row('Host', esc(c.host || '—'))}
+        ${row('ฐานข้อมูล', `<b>${esc(c.database)}</b>`)}
+        ${row('ผู้ใช้', esc(c.username))}
+        ${row('เวอร์ชัน', esc(String(c.version || '').split(' on ')[0]))}
+      </tbody></table></div>
     <div class="card"><div class="card-head"><h3>สถานะระบบ</h3></div>
-      ${chk(t.ok && t.installed, 'ตารางของระบบ', t.installed ? '' : 'รันไฟล์ใน supabase/ ที่ SQL Editor')}
-      ${chk(!!fu?.configured, 'สร้างผู้ใช้ / ตั้งรหัสผ่าน (Vercel: api/admin-users)', fu?.configured ? '' : 'ตั้ง SUPABASE_SERVICE_ROLE_KEY ใน Vercel แล้ว Redeploy')}
-      ${chk(!!fb?.configured, 'สำรองข้อมูล (Vercel: api/backup + Cron 00:00)', fb?.configured ? (fb.cron_secret ? '' : 'แนะนำตั้ง CRON_SECRET') : 'ตั้ง SUPABASE_SERVICE_ROLE_KEY และ CRON_SECRET ใน Vercel')}
-      ${[['ผู้ใช้งาน', counts.profiles], ['ผู้รับ / หน่วยงาน', counts.customers], ['เลขหนังสือที่ออก', counts.letters], ['เช็ค', counts.cheques], ['ไฟล์สำรองข้อมูล', counts.backup_logs]]
+      ${chk(true, 'ตารางของระบบ')}
+      ${chk(!!c.auth_secret, 'กุญแจลงชื่อเข้าใช้ (AUTH_SECRET)', c.auth_secret ? '' : 'แนะนำตั้ง AUTH_SECRET ใน Vercel แล้ว Redeploy (ตอนนี้ใช้ค่าที่สร้างจาก DATABASE_URL)')}
+      ${chk(!!fb?.configured && !!fb?.cron_secret, 'สำรองข้อมูลอัตโนมัติ (Vercel Cron 00:00)', fb?.cron_secret ? '' : 'ตั้ง CRON_SECRET ใน Vercel แล้ว Redeploy')}
+      ${[['ผู้ใช้งาน', n.profiles], ['ผู้รับ / หน่วยงาน', n.customers], ['เลขหนังสือที่ออก', n.letters], ['เช็ค', n.cheques], ['ไฟล์สำรองข้อมูล', n.backup_logs]]
     .map(([k, v]) => `<div class="check-row"><span class="badge b-white">${num(v)}</span><div><b>${k}</b></div></div>`).join('')}</div>
   </div>
   <div class="card" style="margin-top:16px"><div class="card-head"><h3>หมายเหตุ</h3></div>
     <ul style="margin:0;padding-left:22px;line-height:1.6">
-      <li>ระบบนี้เปิดจาก Vercel จึงใช้ฐานข้อมูล <b>Supabase</b> — ถ้าต้องการใช้ MySQL ให้วางโปรแกรมใน XAMPP</li>
-      <li>ค่าการเชื่อมต่อหลักตั้งที่ Vercel → Settings → Environment Variables: <code>SUPABASE_URL</code>, <code>SUPABASE_ANON_KEY</code>, <code>SUPABASE_SERVICE_ROLE_KEY</code>, <code>CRON_SECRET</code> แล้ว Redeploy</li>
-      <li>"ตั้งค่าเองในเบราว์เซอร์นี้" ใช้ชั่วคราว/ทดสอบ มีผลเฉพาะเครื่องนี้</li>
+      <li>ระบบนี้เปิดจาก Vercel จึงใช้ฐานข้อมูล <b>Neon PostgreSQL</b> — ถ้าต้องการใช้ MySQL ให้วางโปรแกรมใน XAMPP</li>
+      <li>ค่าการเชื่อมต่อตั้งที่ Vercel → Settings → Environment Variables: <code>DATABASE_URL</code>, <code>AUTH_SECRET</code>, <code>CRON_SECRET</code> แล้ว Redeploy</li>
+      <li>Neon ไม่หยุดโปรเจกต์ถาวรเมื่อไม่มีคนใช้ (แค่พักเครื่องชั่วคราว และตื่นเองอัตโนมัติเมื่อมีการเรียกใช้ ครั้งแรกอาจช้าขึ้น ~1 วินาที)</li>
     </ul></div>`;
-  $('#cn-supa').addEventListener('click', async () => {
-    const r = await Swal.fire({ title: 'ตั้งค่าการเชื่อมต่อ Supabase', width: 640, focusConfirm: false,
-      html: `<div class="swal-form"><label class="full">Project URL<input id="cs-url" value="${esc(c.url || '')}"></label><label class="full">anon / publishable key<input id="cs-key" value="${esc(c.key || '')}"></label>
-        <div class="full" style="display:flex;gap:10px;align-items:center"><button type="button" class="btn btn-sm" id="cs-test">🔌 ทดสอบ</button><span id="cs-res"></span></div>
-        <p class="full muted" style="margin:0;font-size:18px">มีผลเฉพาะเบราว์เซอร์นี้ · ห้ามใช้ service_role key · ถ้าเปลี่ยนโปรเจกต์ ทุกคนต้องเข้าสู่ระบบใหม่</p></div>`,
-      showCancelButton: true, confirmButtonText: 'บันทึกและเชื่อมต่อ', cancelButtonText: 'ยกเลิก', reverseButtons: true,
-      didOpen: () => $('#cs-test').addEventListener('click', async () => {
-        $('#cs-res').innerHTML = '<span class="muted">กำลังทดสอบ...</span>';
-        const x = await supaTest(val('cs-url'), val('cs-key'));
-        $('#cs-res').innerHTML = `<span class="badge ${x.ok && x.installed ? 'b-printed' : 'b-cancelled'}">${x.ok && x.installed ? '✔' : '✕'} ${esc(x.message)}</span>`;
-      }),
-      preConfirm: async () => { const x = await supaTest(val('cs-url'), val('cs-key')); if (!x.ok || !x.installed) return Swal.showValidationMessage(x.message); return { url: val('cs-url'), key: val('cs-key') }; } });
-    if (!r.isConfirmed) return;
-    saveManualConn(r.value.url, r.value.key);
-    await Swal.fire({ icon: 'success', title: 'บันทึกแล้ว', text: 'ระบบจะโหลดใหม่', timer: 1200, showConfirmButton: false });
-    location.reload();
-  });
-  $('#cn-clear')?.addEventListener('click', async () => {
-    if (!(await ask('ล้างค่าที่ตั้งเอง?', CFG.SUPABASE_URL ? 'กลับไปใช้ค่าจาก Vercel Environment Variables' : 'ระบบจะถามการเชื่อมต่อใหม่'))) return;
-    clearManualConn(); location.reload();
-  });
 }
 
 async function viewConnection() {
-  if (IS_SUPA) return viewConnectionSupa();
+  if (IS_NEON) return viewConnectionNeon();
   view().innerHTML = '<div class="card empty">กำลังโหลด...</div>';
   const c = await api('conn_info');
   if (c.error) throw c.error;
