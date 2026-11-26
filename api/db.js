@@ -60,6 +60,15 @@ async function connStatus() {
   return s;
 }
 
+// Reads run without a transaction (fewer round trips to the database);
+// writes and database functions run in one transaction with auth.uid() set.
+const READ_ONLY = new Set(['session', 'logout', 'backup_status', 'conn_info']);
+function needsTx(a, body) {
+  if (READ_ONLY.has(a)) return false;
+  if (a === 'query') return String(body.op || 'select') !== 'select';
+  return true;
+}
+
 module.exports = async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const a = url.searchParams.get('a') || '';
@@ -82,13 +91,12 @@ module.exports = async function handler(req, res) {
 
     const out = await withClient(async (c) => {
       const me = await A.loadMe(c, req);
-      if (me) await c.query("select set_config('app.user_id', $1, true)", [me.id]);
+      if (me && needsTx(a, body)) await c.query("select set_config('app.user_id', $1, true)", [me.id]);
       switch (a) {
         // ---------- sign-in ----------
         case 'session': {
           if (!me) return ok({ session: null });
-          const u = (await c.query('select * from auth.users where id = $1', [me.id])).rows[0];
-          A.startSession(req, res, u); // renew the 30-day cookie while in use
+          A.startSession(req, res, me.login); // renew the 30-day cookie while in use
           const user = { id: me.id, email: me.login_email || me.email };
           return ok({ session: { access_token: 'cookie', user } });
         }
@@ -148,7 +156,7 @@ module.exports = async function handler(req, res) {
         }
       }
       throw new ApiError('ไม่รู้จักคำสั่ง', 404);
-    }, { tx: true });
+    }, { tx: needsTx(a, body) });
     return send(res, 200, out);
   } catch (e0) {
     const e = friendly(e0);
