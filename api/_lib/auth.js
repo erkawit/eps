@@ -65,6 +65,8 @@ async function loadMe(c, req) {
        from public.profiles p join auth.users u on u.id = p.id where p.id = $1`, [t.uid]);
   const p = rows[0];
   if (!p || pwTag(p.encrypted_password) !== t.pv) return null;
+  // kept out of JSON output, used to renew the cookie without another query
+  Object.defineProperty(p, 'login', { value: { id: p.id, encrypted_password: p.encrypted_password }, enumerable: false });
   delete p.encrypted_password;
   return p;
 }

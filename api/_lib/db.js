@@ -35,30 +35,50 @@ class ApiError extends Error {
   constructor(message, status = 400, code = '') { super(message); this.status = status; this.code = code; }
 }
 
+// One pool per function instance, reused between requests (Vercel keeps the
+// instance warm), so most requests skip the WebSocket/TLS/login handshake.
+let pool = null;
+function getPool(url) {
+  if (pool) return pool;
+  const { Pool } = driver(url);
+  pool = new Pool({ connectionString: url, max: 4, idleTimeoutMillis: 20000, connectionTimeoutMillis: 15000 });
+  pool.on('error', () => { /* a dropped idle connection is simply replaced */ });
+  return pool;
+}
+
 /** Runs fn(client) on one connection. tx = wrap in a transaction. */
 async function withClient(fn, { tx = false, userId = null } = {}) {
   const url = dbUrl();
   if (!url) throw new ApiError('ยังไม่ได้ตั้งค่า DATABASE_URL (Neon) ใน Vercel → Environment Variables', 503, 'not_configured');
-  const { Pool } = driver(url);
-  const pool = new Pool({ connectionString: url, max: 1 });
-  let client;
+  let client; let broken = false;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      client = await getPool(url).connect();
+      if (tx) await client.query('begin');
+      break;
+    } catch (e) {
+      // a pooled connection may have been closed while the instance was idle: retry once on a fresh one
+      if (client) { client.release(true); client = null; }
+      if (attempt === 0) continue;
+      throw new ApiError(`เชื่อมต่อฐานข้อมูล Neon ไม่ได้: ${e.message}`, 503, 'db_unreachable');
+    }
+  }
   try {
-    try { client = await pool.connect(); }
-    catch (e) { throw new ApiError(`เชื่อมต่อฐานข้อมูล Neon ไม่ได้: ${e.message}`, 503, 'db_unreachable'); }
     if (!tx) return await fn(client);
-    await client.query('begin');
     try {
       if (userId) await client.query("select set_config('app.user_id', $1, true)", [userId]);
       const r = await fn(client);
       await client.query('commit');
       return r;
     } catch (e) {
-      try { await client.query('rollback'); } catch { /* ignore */ }
+      try { await client.query('rollback'); } catch { broken = true; }
       throw e;
     }
+  } catch (e) {
+    if (!e.code && !(e instanceof ApiError)) broken = true; // network error → drop this connection
+    throw e;
   } finally {
-    if (client) client.release();
-    await pool.end().catch(() => {});
+    client.release(broken);
   }
 }
 
