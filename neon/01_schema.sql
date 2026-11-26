@@ -1,6 +1,6 @@
 -- =====================================================================
 --  ระบบพิมพ์ซองจดหมาย (Envelope Printing System)
---  01_schema.sql  —  run this first in the Supabase SQL Editor
+--  01_schema.sql  —  run after 00_auth_shim.sql (npm run db:setup runs all files in order)
 --  Structure: master data from the original Access tables
 --  (tblSetup, tblTitle, tblProvince, PostCode, tblCustomer)
 --  + outgoing-letter register (books / letters) + user profiles

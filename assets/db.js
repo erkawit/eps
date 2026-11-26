@@ -5,8 +5,14 @@
 //    await sb.rpc('issue_letters', { ... })
 //    await sb.auth.signInWithPassword({ email, password })
 //  ทุกคำสั่งคืนค่า { data, error, count } (ไม่ throw)
+//  • XAMPP  : api/index.php (PHP + MySQL)
+//  • Vercel : /api/db (Node + Neon PostgreSQL) — config.js มี API_URL: '/api/db'
 // =====================================================================
-export const API = new URL('api/index.php', new URL('..', import.meta.url)).href;
+const CFG = (typeof window !== 'undefined' && window.APP_CONFIG) || {};
+export const API = CFG.API_URL
+  ? new URL(CFG.API_URL, location.href).href
+  : new URL('api/index.php', new URL('..', import.meta.url)).href;
+const NET_HINT = CFG.API_URL ? 'ติดต่อเซิร์ฟเวอร์ไม่ได้ — ตรวจสอบอินเทอร์เน็ต' : 'ติดต่อเซิร์ฟเวอร์ไม่ได้ — ตรวจสอบว่าเปิด Apache ใน XAMPP แล้ว';
 
 const errObj = (message, code, status) => ({ message, code: code || '', status: status || 0 });
 
@@ -18,11 +24,11 @@ export async function api(action, payload, opts = {}) {
       ? { credentials: 'same-origin', cache: 'no-store' }
       : { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   } catch (e) {
-    return { data: null, error: errObj('ติดต่อเซิร์ฟเวอร์ไม่ได้ — ตรวจสอบว่าเปิด Apache ใน XAMPP แล้ว', 'network') };
+    return { data: null, error: errObj(NET_HINT, 'network') };
   }
   let j = null;
   try { j = await r.json(); } catch { /* not json */ }
-  if (!j) return { data: null, error: errObj(r.status === 404 ? 'ไม่พบ API (api/index.php) — ตรวจสอบตำแหน่งโฟลเดอร์ใน htdocs' : `เซิร์ฟเวอร์ตอบกลับผิดรูปแบบ (HTTP ${r.status}) — PHP อาจเกิดข้อผิดพลาด`, 'bad_response', r.status) };
+  if (!j) return { data: null, error: errObj(r.status === 404 ? (CFG.API_URL ? 'ไม่พบ API (/api/db) บน Vercel' : 'ไม่พบ API (api/index.php) — ตรวจสอบตำแหน่งโฟลเดอร์ใน htdocs') : `เซิร์ฟเวอร์ตอบกลับผิดรูปแบบ (HTTP ${r.status})`, 'bad_response', r.status) };
   if (!r.ok || (j.error && typeof j.error === 'object')) {
     const e = errObj(j.error?.message || `HTTP ${r.status}`, j.error?.code, r.status);
     if (r.status === 401 && opts.onUnauthorized) opts.onUnauthorized();

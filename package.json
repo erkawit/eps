@@ -1,11 +1,19 @@
 {
   "name": "envelope-print-system",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "ระบบพิมพ์ซองจดหมาย + ระบบพิมพ์เช็ค — MySQL (XAMPP) หรือ Supabase (Vercel)",
+  "description": "ระบบพิมพ์ซองจดหมาย + ระบบพิมพ์เช็ค — MySQL (XAMPP) หรือ Neon PostgreSQL (Vercel)",
   "scripts": {
     "build": "node scripts/build-config.js",
-    "dev": "npm run build && npx --yes serve dist -l 3000"
+    "dev": "npm run build && node scripts/dev-server.js",
+    "db:setup": "node scripts/neon-setup.js",
+    "db:migrate-from-supabase": "node scripts/migrate-supabase-to-neon.js"
   },
-  "engines": { "node": ">=18" }
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0",
+    "bcryptjs": "^2.4.3",
+    "pg": "^8.13.0",
+    "ws": "^8.18.0"
+  },
+  "engines": { "node": ">=20" }
 }
